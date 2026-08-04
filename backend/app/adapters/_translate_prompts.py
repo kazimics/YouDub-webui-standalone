@@ -7,6 +7,8 @@ PREPROCESS_PROMPT = """你为视频字幕翻译做预处理。请阅读视频元
 
 # 输出 JSON 格式（严格遵守）
 {{
+  "translated_title": "<{dst_language_name} 写的视频标题；原始标题为空时返回空字符串>",
+  "translated_description": "<{dst_language_name} 写的视频简介，保留原文信息和自然段；原始简介为空时返回空字符串>",
   "summary": "<{dst_language_name} 写的视频摘要，3-5 句>",
   "hotwords": [
     {{"src": "<原文术语>", "dst": "<目标语言推荐译法；如 Transformer/GPU 一类应保持原样，则 dst 与 src 相同>"}}
@@ -15,6 +17,11 @@ PREPROCESS_PROMPT = """你为视频字幕翻译做预处理。请阅读视频元
     {{"wrong": "<转录中明显错认的写法>", "correct": "<正确写法>"}}
   ]
 }}
+
+# 标题与简介翻译要点
+- 忠实、自然地翻译标题和简介，不增加原文没有的信息。
+- 保留人名、品牌、产品名、代码、URL、时间戳和简介中的分段结构。
+- `translated_title` 与 `translated_description` 必须使用目标译文语言；对应原文不存在时返回空字符串。
 
 # 热词识别要点
 - 识别专有名词、人名、地名、品牌、技术术语、反复出现的概念。

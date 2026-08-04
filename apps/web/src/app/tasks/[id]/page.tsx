@@ -1,6 +1,7 @@
 "use client"
 
 import { useRouter } from "next/navigation"
+import Image from "next/image"
 import { use, useCallback, useMemo, useState } from "react"
 import {
   CheckCircle2,
@@ -29,6 +30,7 @@ import {
   redoStage,
   rerunTask,
   resumeTask,
+  taskThumbnailUrl,
 } from "@/lib/api"
 import { useI18n } from "@/lib/i18n"
 import { statusBadgeClass } from "@/lib/status"
@@ -92,6 +94,7 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
   const router = useRouter()
   const { stageLabel, statusLabel, t } = useI18n()
   const [task, setTask] = useState<Task | null>(null)
+  const [failedThumbnailPath, setFailedThumbnailPath] = useState<string | null>(null)
   const [log, setLog] = useState("")
   const [error, setError] = useState("")
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -251,19 +254,47 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
           </CardHeader>
           <CardContent>
             {task ? (
-              <dl className="grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-[120px_1fr]">
-                {task.title ? (
-                  <>
-                    <dt className="text-muted-foreground">{t.task.title}</dt>
-                    <dd className="break-words font-medium">{task.title}</dd>
-                  </>
+              <>
+                {task.thumbnail_path && failedThumbnailPath !== task.thumbnail_path ? (
+                  <div className="relative mb-5 aspect-video w-full overflow-hidden rounded-md border bg-black">
+                    <Image
+                      src={taskThumbnailUrl(task.id)}
+                      alt={task.title ? `${t.task.thumbnail}: ${task.title}` : t.task.thumbnail}
+                      fill
+                      unoptimized
+                      sizes="(max-width: 896px) 100vw, 832px"
+                      className="object-contain"
+                      onError={() => setFailedThumbnailPath(task.thumbnail_path)}
+                    />
+                  </div>
                 ) : null}
-                <dt className="text-muted-foreground">URL</dt>
-                <dd className="break-all">
-                  <a href={task.url} target="_blank" rel="noreferrer" className="text-[#00aeec] hover:underline">
-                    {task.url}
-                  </a>
-                </dd>
+                <dl className="grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-[120px_1fr]">
+                  {task.title ? (
+                    <>
+                      <dt className="text-muted-foreground">{t.task.title}</dt>
+                      <dd className="break-words font-medium">{task.title}</dd>
+                    </>
+                  ) : null}
+                  {task.translated_title ? (
+                    <>
+                      <dt className="text-muted-foreground">{t.task.translatedTitle}</dt>
+                      <dd className="break-words font-medium">{task.translated_title}</dd>
+                    </>
+                  ) : null}
+                  {task.translated_description ? (
+                    <>
+                      <dt className="text-muted-foreground">{t.task.translatedDescription}</dt>
+                      <dd className="whitespace-pre-wrap break-words leading-relaxed">
+                        {task.translated_description}
+                      </dd>
+                    </>
+                  ) : null}
+                  <dt className="text-muted-foreground">URL</dt>
+                  <dd className="break-all">
+                    <a href={task.url} target="_blank" rel="noreferrer" className="text-[#00aeec] hover:underline">
+                      {task.url}
+                    </a>
+                  </dd>
                 <dt className="text-muted-foreground">{t.task.taskId}</dt>
                 <dd className="font-mono text-xs">{task.id}</dd>
                 <dt className="text-muted-foreground">{t.task.created}</dt>
@@ -284,7 +315,8 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
                     <dd className="break-all text-xs text-muted-foreground">{task.session_path}</dd>
                   </>
                 ) : null}
-              </dl>
+                </dl>
+              </>
             ) : (
               <div className="py-6 text-center text-sm text-muted-foreground">{t.task.loading}</div>
             )}

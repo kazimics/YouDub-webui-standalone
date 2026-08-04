@@ -44,6 +44,9 @@ def init_db() -> None:
               id TEXT PRIMARY KEY,
               url TEXT NOT NULL,
               title TEXT,
+              translated_title TEXT,
+              translated_description TEXT,
+              thumbnail_path TEXT,
               status TEXT NOT NULL,
               current_stage TEXT,
               session_path TEXT,
@@ -107,6 +110,12 @@ def init_db() -> None:
         task_columns = {row["name"] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
         if "title" not in task_columns:
             conn.execute("ALTER TABLE tasks ADD COLUMN title TEXT")
+        if "translated_title" not in task_columns:
+            conn.execute("ALTER TABLE tasks ADD COLUMN translated_title TEXT")
+        if "translated_description" not in task_columns:
+            conn.execute("ALTER TABLE tasks ADD COLUMN translated_description TEXT")
+        if "thumbnail_path" not in task_columns:
+            conn.execute("ALTER TABLE tasks ADD COLUMN thumbnail_path TEXT")
         if "execution_mode" not in task_columns:
             conn.execute(
                 "ALTER TABLE tasks ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'auto'"

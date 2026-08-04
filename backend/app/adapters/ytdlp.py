@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,15 @@ DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
+THUMBNAIL_MAX_BYTES = 10 * 1024 * 1024
+THUMBNAIL_CONTENT_TYPES = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/avif": ".avif",
+}
+
+log = logging.getLogger(__name__)
 
 
 def _bootstrap_bilibili_cookie(cookie_path: Path) -> None:
@@ -102,6 +112,89 @@ def _remove_partial_outputs(video_file: Path) -> None:
             candidate.unlink(missing_ok=True)
 
 
+def _thumbnail_url(info: dict[str, Any]) -> str:
+    candidates = [info.get("thumbnail")]
+    candidates.extend(
+        item.get("url")
+        for item in reversed(info.get("thumbnails") or [])
+        if isinstance(item, dict)
+    )
+    for value in candidates:
+        url = str(value or "").strip()
+        if url.startswith(("https://", "http://")):
+            return url
+    return ""
+
+
+def _download_thumbnail(
+    info: dict[str, Any],
+    media_dir: Path,
+    source: SourceConfig,
+    proxy_port: str,
+) -> Path | None:
+    existing = next(
+        (
+            path
+            for path in sorted(media_dir.glob("thumbnail.*"))
+            if path.is_file() and not path.name.endswith(".part")
+        ),
+        None,
+    )
+    if existing:
+        return existing
+
+    url = _thumbnail_url(info)
+    if not url:
+        return None
+
+    session = requests.Session()
+    session.trust_env = False
+    proxy = _proxy_url(proxy_port) if source.use_proxy else ""
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    headers = {"User-Agent": DEFAULT_USER_AGENT}
+    headers.update(info.get("http_headers") or {})
+    part_file: Path | None = None
+    try:
+        with session.get(
+            url,
+            headers=headers,
+            proxies=proxies,
+            stream=True,
+            timeout=20,
+        ) as response:
+            response.raise_for_status()
+            content_type = response.headers.get("Content-Type", "").split(";", 1)[0].lower()
+            extension = THUMBNAIL_CONTENT_TYPES.get(content_type)
+            if not extension:
+                raise ValueError(f"Unsupported thumbnail content type: {content_type or 'unknown'}")
+            content_length = int(response.headers.get("Content-Length") or 0)
+            if content_length > THUMBNAIL_MAX_BYTES:
+                raise ValueError("Thumbnail exceeds the 10 MB size limit.")
+
+            output_file = media_dir / f"thumbnail{extension}"
+            part_file = media_dir / f"thumbnail{extension}.part"
+            size = 0
+            with part_file.open("wb") as handle:
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    if not chunk:
+                        continue
+                    size += len(chunk)
+                    if size > THUMBNAIL_MAX_BYTES:
+                        raise ValueError("Thumbnail exceeds the 10 MB size limit.")
+                    handle.write(chunk)
+            if size == 0:
+                raise ValueError("Thumbnail response was empty.")
+            part_file.replace(output_file)
+            return output_file
+    except (OSError, requests.RequestException, ValueError) as exc:
+        if part_file:
+            part_file.unlink(missing_ok=True)
+        log.warning("Could not save video thumbnail from %s: %s", url, exc)
+        return None
+    finally:
+        session.close()
+
+
 def _download_with_format_candidates(
     url: str, video_file: Path, source: SourceConfig, proxy_port: str
 ) -> None:
@@ -152,6 +245,9 @@ def download_video(
 
     video_file = media_dir / "video_source.mp4"
     metadata_file = metadata_dir / "ytdlp_info.json"
+    thumbnail_path = _download_thumbnail(info, media_dir, source, proxy_port)
+    if thumbnail_path:
+        info["thumbnail_path"] = str(thumbnail_path)
     metadata_file.write_text(json.dumps(ydl.sanitize_info(info), ensure_ascii=False, indent=2), encoding="utf-8")
 
     if video_file.exists() and video_file.stat().st_size > 0:

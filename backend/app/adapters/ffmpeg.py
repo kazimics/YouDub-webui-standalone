@@ -23,11 +23,13 @@ NATIVE_PROCESS_CRASH_THRESHOLD = 0xC0000000
 SUBTITLE_FONTS = {
     "zh": "Noto Sans CJK SC",
     "en": "Arial",
+    "bilingual": "Noto Sans CJK SC",
 }
 
 SUBTITLE_FONT_SIZES = {
     "zh": {"portrait": 12, "landscape": 24},
     "en": {"portrait": 9, "landscape": 18},
+    "bilingual": {"portrait": 9, "landscape": 18},
 }
 
 
@@ -167,16 +169,44 @@ def _dst_text(item: dict) -> str:
     return item.get("dst") or item.get("zh") or ""
 
 
+def _clean_subtitle_line(value: str) -> str:
+    return re.sub(r"\s+", " ", value or "").strip()
+
+
+def _bilingual_text(item: dict) -> str:
+    src = _clean_subtitle_line(str(item.get("src") or ""))
+    dst = _clean_subtitle_line(str(_dst_text(item)))
+    if not src or not dst or src == dst:
+        return ""
+
+    src_lang = item.get("src_lang")
+    dst_lang = item.get("dst_lang")
+    if src_lang == "zh":
+        zh, en = src, dst
+    elif dst_lang == "zh":
+        zh, en = dst, src
+    else:
+        zh, en = dst, src
+    return f"{zh}\n{en}"
+
+
 def write_srt(translation_file: Path, session: Path) -> Path:
     data = json.loads(translation_file.read_text(encoding="utf-8"))
     translation = data["translation"]
     dst_lang = _dst_lang(translation)
-    output_file = session / "metadata" / f"subtitles.{dst_lang}.srt"
+    has_bilingual_items = any(_bilingual_text(item) for item in translation)
+    subtitle_kind = "bilingual" if has_bilingual_items else dst_lang
+    output_file = session / "metadata" / f"subtitles.{subtitle_kind}.srt"
     lines: list[str] = []
     idx = 1
     for item in translation:
         start, end = _segment_times(item)
         if end <= start:
+            continue
+        bilingual = _bilingual_text(item)
+        if bilingual:
+            lines.extend([str(idx), f"{_srt_time(start)} --> {_srt_time(end)}", bilingual, ""])
+            idx += 1
             continue
         fragments = split_subtitle_text(_dst_text(item))
         if not fragments:

@@ -62,6 +62,83 @@ def test_pipeline_marks_all_stages_succeeded(monkeypatch, tmp_path):
     assert [stage["progress"] for stage in task["stages"]] == [100] * 9
 
 
+def test_translate_stage_saves_translated_metadata_on_task(monkeypatch, tmp_path):
+    from backend.app.adapters import openai_translate
+
+    configure_db(monkeypatch, tmp_path)
+    task_id = database.create_task(
+        "https://www.youtube.com/watch?v=metadataxxx",
+        task_id="metadataxxx",
+    )
+    task = database.get_task(task_id)
+    session = tmp_path / "session"
+    metadata = session / "metadata"
+    metadata.mkdir(parents=True)
+    asr_file = metadata / "asr_fixed.json"
+    asr_file.write_text('{"result": {"utterances": []}}', encoding="utf-8")
+
+    def fake_translate_asr(asr_path, session_path, settings, source):
+        assert asr_path == asr_file
+        openai_translate.write_preprocess_artifact(
+            session_path,
+            openai_translate.PreprocessResponse(
+                translated_title="Translated task title",
+                translated_description="Translated task description.",
+            ),
+        )
+        output = metadata / "translation.zh.json"
+        output.write_text('{"translation": []}', encoding="utf-8")
+        return output
+
+    monkeypatch.setattr(openai_translate, "translate_asr", fake_translate_asr)
+    runner = PipelineRunner(task_id)
+    runner.artifacts.session = session
+    runner.artifacts.asr_fixed_file = asr_file
+
+    runner._translate(task)
+
+    saved = database.get_task(task_id)
+    assert saved["translated_title"] == "Translated task title"
+    assert saved["translated_description"] == "Translated task description."
+
+
+def test_download_stage_saves_thumbnail_path_on_task(monkeypatch, tmp_path):
+    from backend.app.adapters import ytdlp
+
+    configure_db(monkeypatch, tmp_path)
+    task_id = database.create_task(
+        "https://www.youtube.com/watch?v=thumbnailxx",
+        task_id="thumbnailxx",
+    )
+    task = database.get_task(task_id)
+    session = tmp_path / "session"
+    media = session / "media"
+    media.mkdir(parents=True)
+    video = media / "video_source.mp4"
+    thumbnail = media / "thumbnail.webp"
+    video.write_bytes(b"video")
+    thumbnail.write_bytes(b"image")
+
+    monkeypatch.setattr(
+        ytdlp,
+        "download_video",
+        lambda *args: (
+            session,
+            {
+                "title": "Video with thumbnail",
+                "thumbnail_path": str(thumbnail),
+            },
+        ),
+    )
+    runner = PipelineRunner(task_id)
+
+    runner._download(task)
+
+    saved = database.get_task(task_id)
+    assert saved["title"] == "Video with thumbnail"
+    assert saved["thumbnail_path"] == str(thumbnail)
+
+
 def test_pipeline_skips_already_succeeded_stages(monkeypatch, tmp_path):
     configure_db(monkeypatch, tmp_path)
     task_id = database.create_task("https://www.youtube.com/watch?v=resumevidxxx", task_id="resumevidxxx")

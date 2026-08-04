@@ -45,6 +45,18 @@ def test_subtitle_styles_use_smaller_size_for_english():
     assert "FontSize=18" in landscape_en
 
 
+def test_subtitle_styles_use_cjk_font_and_smaller_size_for_bilingual():
+    portrait = ffmpeg.subtitle_style_for_orientation(
+        "portrait", "Noto Sans CJK SC", "bilingual"
+    )
+    landscape = ffmpeg.subtitle_style_for_orientation(
+        "landscape", "Noto Sans CJK SC", "bilingual"
+    )
+
+    assert "FontSize=9" in portrait
+    assert "FontSize=18" in landscape
+
+
 def test_subtitle_filter_picks_chinese_font_for_zh_srt(monkeypatch, tmp_path):
     monkeypatch.setattr(ffmpeg, "get_video_orientation", lambda _: "landscape")
     sub_zh = tmp_path / "subtitles.zh.srt"
@@ -69,7 +81,10 @@ def test_merge_video_burns_portrait_subtitles(monkeypatch, tmp_path):
                         "end_time": 1200,
                         "actual_start_time": 0,
                         "actual_end_time": 1200,
-                        "zh": "你好",
+                        "src": "Hello",
+                        "dst": "你好",
+                        "src_lang": "en",
+                        "dst_lang": "zh",
                     }
                 ]
             }
@@ -116,8 +131,8 @@ def test_merge_video_burns_portrait_subtitles(monkeypatch, tmp_path):
     assert len(ffmpeg_commands) == 2
     final_command = ffmpeg_commands[-1]
     filter_arg = final_command[final_command.index("-vf") + 1]
-    assert filter_arg.startswith("subtitles=filename='metadata/subtitles.zh.srt'")
-    assert "FontSize=12" in filter_arg
+    assert filter_arg.startswith("subtitles=filename='metadata/subtitles.bilingual.srt'")
+    assert "FontSize=9" in filter_arg
     assert "MarginV=70" in filter_arg
     assert "-c:s" not in final_command
     assert cwd_values[commands.index(final_command)] == session.resolve()
@@ -204,7 +219,14 @@ def test_merge_video_with_original_audio_burns_subtitles_and_keeps_source_audio(
         json.dumps(
             {
                 "translation": [
-                    {"start_time": 0, "end_time": 1200, "dst_lang": "zh", "dst": "你好"}
+                    {
+                        "start_time": 0,
+                        "end_time": 1200,
+                        "src_lang": "en",
+                        "dst_lang": "zh",
+                        "src": "Hello",
+                        "dst": "你好",
+                    }
                 ]
             }
         ),
@@ -246,7 +268,7 @@ def test_merge_video_with_original_audio_burns_subtitles_and_keeps_source_audio(
     assert render_command[render_command.index("-c:a") + 1] == "aac"
     assert render_command[render_command.index("-b:a") + 1] == "192k"
     assert any(
-        arg.startswith("subtitles=filename='metadata/subtitles.zh.srt'")
+        arg.startswith("subtitles=filename='metadata/subtitles.bilingual.srt'")
         for arg in render_command
     )
     assert render_command[-1].endswith("video_final.part.mp4")
@@ -514,6 +536,45 @@ def test_write_srt_splits_long_sentence_into_multiple_entries(tmp_path):
     blocks = [b for b in content.strip().split("\n\n") if b.strip()]
     assert len(blocks) >= 3
     assert all("-->" in b for b in blocks)
+
+
+def test_write_srt_puts_chinese_above_english_for_both_directions(tmp_path):
+    session = tmp_path / "session"
+    metadata_dir = session / "metadata"
+    metadata_dir.mkdir(parents=True)
+    translation = metadata_dir / "translation.json"
+    translation.write_text(
+        json.dumps(
+            {
+                "translation": [
+                    {
+                        "start_time": 0,
+                        "end_time": 1000,
+                        "src_lang": "en",
+                        "dst_lang": "zh",
+                        "src": "Hello world.",
+                        "dst": "你好，世界。",
+                    },
+                    {
+                        "start_time": 1000,
+                        "end_time": 2000,
+                        "src_lang": "zh",
+                        "dst_lang": "en",
+                        "src": "再见。",
+                        "dst": "Goodbye.",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    srt = ffmpeg.write_srt(translation, session)
+
+    assert srt.name == "subtitles.bilingual.srt"
+    content = srt.read_text(encoding="utf-8")
+    assert "你好，世界。\nHello world." in content
+    assert "再见。\nGoodbye." in content
 
 
 def test_probe_video_size_uses_configured_ffprobe(monkeypatch):

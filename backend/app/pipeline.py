@@ -302,7 +302,13 @@ class PipelineRunner:
         self.artifacts.session = session
         self.artifacts.video_file = session / "media" / "video_source.mp4"
         title = (info.get("title") or "").strip() or None
-        database.update_task(self.task_id, session_path=str(session), title=title)
+        thumbnail_path = str(info.get("thumbnail_path") or "").strip() or None
+        database.update_task(
+            self.task_id,
+            session_path=str(session),
+            title=title,
+            thumbnail_path=thumbnail_path,
+        )
         self.stage_message("download", f"[{source.name}] {title or 'Downloaded'} -> {session}")
 
     def _separate(self, _: dict) -> None:
@@ -404,7 +410,7 @@ class PipelineRunner:
             )
             return
 
-        from .adapters.openai_translate import translate_asr
+        from .adapters.openai_translate import load_preprocess_artifact, translate_asr
 
         asr_file = _require(self.artifacts.asr_fixed_file, "asr_fixed_file")
         settings = database.get_openai_settings()
@@ -414,6 +420,13 @@ class PipelineRunner:
         )
         self.artifacts.translation_file = translate_asr(asr_file, session, settings, source)
         items = _json.loads(self.artifacts.translation_file.read_text(encoding="utf-8"))["translation"]
+        pre = load_preprocess_artifact(session)
+        if pre is not None:
+            database.update_task(
+                self.task_id,
+                translated_title=pre.translated_title.strip() or None,
+                translated_description=pre.translated_description.strip() or None,
+            )
         self.stage_message(
             "translate",
             f"Translated {len(items)} sentences -> {self.artifacts.translation_file.name}",

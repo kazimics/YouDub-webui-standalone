@@ -646,6 +646,27 @@ def final_video(task_id: str, download: bool = False) -> FileResponse:
     return FileResponse(final_path, media_type="video/mp4", headers=headers)
 
 
+@app.get("/api/tasks/{task_id}/artifact/thumbnail")
+def task_thumbnail(task_id: str) -> FileResponse:
+    task = database.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    thumbnail_path = task.get("thumbnail_path")
+    session_path = task.get("session_path")
+    if not thumbnail_path or not session_path:
+        raise HTTPException(status_code=404, detail="Thumbnail is not available.")
+
+    path = Path(thumbnail_path).resolve()
+    media_dir = (Path(session_path) / "media").resolve()
+    try:
+        path.relative_to(media_dir)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Thumbnail is not available.") from None
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Thumbnail is not available.")
+    return FileResponse(path)
+
+
 @app.get("/api/cookies/youtube")
 def get_youtube_cookie() -> dict:
     metadata = runtime_security.private_file_stat(YOUTUBE_COOKIE_PATH)

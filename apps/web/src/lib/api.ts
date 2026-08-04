@@ -104,6 +104,9 @@ export type Task = {
   id: string
   url: string
   title: string | null
+  translated_title: string | null
+  translated_description: string | null
+  thumbnail_path: string | null
   status: TaskStatus
   current_stage: string | null
   session_path: string | null
@@ -390,4 +393,8 @@ export function finalVideoUrl(taskId: string) {
 
 export function finalVideoDownloadUrl(taskId: string) {
   return `/api/tasks/${taskId}/artifact/final-video?download=1`
+}
+
+export function taskThumbnailUrl(taskId: string) {
+  return `/api/tasks/${taskId}/artifact/thumbnail`
 }

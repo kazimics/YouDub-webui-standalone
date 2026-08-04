@@ -132,7 +132,7 @@ describe("配音开关", () => {
 
     const dubbingSwitch = screen.getByRole("switch", { name: "生成配音" })
     expect(dubbingSwitch).toBeChecked()
-    expect(screen.getByText("关闭后保留视频原声，仍会翻译并压制字幕。")).toBeInTheDocument()
+    expect(screen.getByText("关闭后保留视频原声，仍会翻译并压制中英双语字幕。")).toBeInTheDocument()
 
     await user.click(dubbingSwitch)
     expect(dubbingSwitch).not.toBeChecked()

@@ -25,6 +25,9 @@ function taskWithStatus(status: TaskStatus): Task {
     id: "task-race",
     url: "https://example.com/task-race",
     title: "轮询竞态任务",
+    translated_title: "Task with a polling race",
+    translated_description: "First paragraph.\n\nSecond paragraph.",
+    thumbnail_path: "D:\\workfolder\\task-race\\media\\thumbnail.jpg",
     status,
     current_stage: status === "queued" ? "separate" : "download",
     session_path: null,
@@ -64,6 +67,43 @@ afterEach(() => {
 })
 
 describe("任务详情轮询", () => {
+  it("在任务概览显示封面、翻译标题和简介", async () => {
+    mocks.fetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      const method = init?.method || "GET"
+      if (method === "GET" && path === "/api/tasks/task-race") {
+        return jsonResponse(taskWithStatus("succeeded"))
+      }
+      if (method === "GET" && path === "/api/tasks/task-race/log") {
+        return new Response("done", { status: 200 })
+      }
+      throw new Error(`未预期的请求: ${method} ${path}`)
+    })
+    vi.stubGlobal("fetch", mocks.fetch)
+
+    const params = Promise.resolve({ id: "task-race" })
+    await act(async () => {
+      render(
+        <LanguageProvider>
+          <Suspense fallback={<div>loading</div>}>
+            <TaskDetailPage params={params} />
+          </Suspense>
+        </LanguageProvider>,
+      )
+      await params
+    })
+
+    expect(await screen.findByText("翻译标题")).toBeInTheDocument()
+    expect(
+      screen.getByRole("img", { name: "视频封面: 轮询竞态任务" }).getAttribute("src"),
+    ).toMatch(/\/api\/tasks\/task-race\/artifact\/thumbnail$/)
+    expect(screen.getByText("Task with a polling race")).toBeInTheDocument()
+    expect(screen.getByText("翻译简介")).toBeInTheDocument()
+    expect(screen.getByText(/First paragraph/)).toHaveTextContent(
+      "First paragraph. Second paragraph.",
+    )
+  })
+
   it("continue 返回新状态后不会被动作前的迟到轮询覆盖", async () => {
     let resolveOldPoll!: (response: Response) => void
     const oldPoll = new Promise<Response>((resolve) => {
@@ -165,7 +205,7 @@ describe("任务详情轮询", () => {
       await params
     })
 
-    expect(await screen.findByText("原声（带翻译字幕）")).toBeInTheDocument()
+    expect(await screen.findByText("原声（带中英双语字幕）")).toBeInTheDocument()
     expect(screen.getByText("最终音频模式")).toBeInTheDocument()
     expect(screen.getByText("已跳过")).toBeInTheDocument()
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100")

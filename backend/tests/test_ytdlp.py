@@ -64,6 +64,52 @@ def test_ytdlp_format_candidates_start_with_backend_format():
     assert "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best" not in ytdlp.FORMAT_CANDIDATES
 
 
+def test_download_thumbnail_saves_valid_image_atomically(monkeypatch, tmp_path):
+    captured = {}
+
+    class FakeResponse:
+        headers = {"Content-Type": "image/jpeg", "Content-Length": "7"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        def iter_content(self, chunk_size):
+            captured["chunk_size"] = chunk_size
+            return [b"image", b"!!"]
+
+    class FakeSession:
+        trust_env = True
+
+        def get(self, url, **kwargs):
+            captured.update(url=url, **kwargs, trust_env=self.trust_env)
+            return FakeResponse()
+
+        def close(self):
+            captured["closed"] = True
+
+    monkeypatch.setattr(ytdlp.requests, "Session", FakeSession)
+
+    path = ytdlp._download_thumbnail(
+        {"thumbnail": "https://img.example/cover.jpg"},
+        tmp_path,
+        _youtube_source(),
+        "",
+    )
+
+    assert path == tmp_path / "thumbnail.jpg"
+    assert path.read_bytes() == b"image!!"
+    assert not (tmp_path / "thumbnail.jpg.part").exists()
+    assert captured["url"] == "https://img.example/cover.jpg"
+    assert captured["trust_env"] is False
+    assert captured["closed"] is True
+
+
 def _youtube_source() -> SourceConfig:
     return SourceConfig(
         name="youtube",

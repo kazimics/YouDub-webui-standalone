@@ -69,6 +69,8 @@ def test_translate_asr_writes_preprocess_artifact(tmp_path, monkeypatch):
     _write_asr(asr_file, 1)
 
     pre = PreprocessResponse(
+        translated_title="寓言 5 深度解析",
+        translated_description="本期视频介绍 Fable 5。",
         summary="Video recap",
         hotwords=[HotwordItem(src="Fable 5", dst="Fable 5")],
         corrections=[CorrectionItem(wrong="java script", correct="JavaScript")],
@@ -80,6 +82,8 @@ def test_translate_asr_writes_preprocess_artifact(tmp_path, monkeypatch):
     artifact = metadata / "translation_preprocess.json"
     assert artifact.exists()
     saved = json.loads(artifact.read_text(encoding="utf-8"))
+    assert saved["translated_title"] == "寓言 5 深度解析"
+    assert saved["translated_description"] == "本期视频介绍 Fable 5。"
     assert saved["summary"] == "Video recap"
     assert saved["hotwords"][0]["src"] == "Fable 5"
     assert saved["corrections"][0]["correct"] == "JavaScript"
@@ -110,6 +114,8 @@ def test_translate_asr_reuses_preprocess_artifact_without_calling_api(tmp_path, 
     openai_translate.translate_asr(asr_file, tmp_path, _settings(), YT_SOURCE)
     assert len(seen) == 1
     assert seen[0]["pre"].summary == "cached"
+    assert seen[0]["pre"].translated_title == ""
+    assert seen[0]["pre"].translated_description == ""
 
 
 def test_translate_asr_writes_schema_with_speaker_and_lang(tmp_path, monkeypatch):
@@ -410,6 +416,38 @@ def test_preprocess_returns_empty_when_repeatedly_invalid(monkeypatch):
     assert pre.summary == ""
     assert pre.hotwords == []
     assert pre.corrections == []
+
+
+def test_preprocess_requests_and_parses_translated_metadata(monkeypatch):
+    captured: dict[str, str] = {}
+
+    def fake_call_json(client, model, system, user):
+        captured["user"] = user
+        return {
+            "translated_title": "Translated title",
+            "translated_description": "Translated description",
+            "summary": "Summary",
+            "hotwords": [],
+            "corrections": [],
+        }
+
+    monkeypatch.setattr(openai_translate, "_call_json", fake_call_json)
+    monkeypatch.setattr(openai_translate, "_client", lambda *a, **kw: object())
+
+    pre = openai_translate.preprocess(
+        "text",
+        {"title": "Original", "description": "D" * 600},
+        YT_SOURCE,
+        base_url="u",
+        api_key="k",
+        model="m",
+    )
+
+    assert pre.translated_title == "Translated title"
+    assert pre.translated_description == "Translated description"
+    assert '"translated_title"' in captured["user"]
+    assert '"translated_description"' in captured["user"]
+    assert "D" * 600 in captured["user"]
 
 
 def test_translate_system_prompt_contains_meta_summary_hotwords(monkeypatch):

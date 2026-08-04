@@ -184,7 +184,7 @@ def test_same_video_with_different_dubbing_setting_returns_conflict(monkeypatch,
     assert enqueued == ["abcdefghijk"]
 
 
-def test_init_db_migrates_existing_tasks_to_dubbing_enabled(monkeypatch, tmp_path):
+def test_init_db_migrates_existing_tasks_to_current_schema(monkeypatch, tmp_path):
     db_path = tmp_path / "legacy.sqlite"
     with sqlite3.connect(db_path) as conn:
         conn.execute(
@@ -218,7 +218,14 @@ def test_init_db_migrates_existing_tasks_to_dubbing_enabled(monkeypatch, tmp_pat
     with sqlite3.connect(db_path) as conn:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
     assert "dubbing_enabled" in columns
-    assert database.get_task("legacy")["dubbing_enabled"] is True
+    assert "translated_title" in columns
+    assert "translated_description" in columns
+    assert "thumbnail_path" in columns
+    task = database.get_task("legacy")
+    assert task["dubbing_enabled"] is True
+    assert task["translated_title"] is None
+    assert task["translated_description"] is None
+    assert task["thumbnail_path"] is None
 
 
 def test_different_videos_create_separate_tasks(monkeypatch, tmp_path):
@@ -465,6 +472,51 @@ def test_task_detail_includes_stage_progress(monkeypatch, tmp_path):
     stages = {stage["name"]: stage for stage in response.json()["stages"]}
     assert stages["tts"]["progress"] == 42
     assert stages["tts"]["last_message"] == "Prepared 21/50 TTS clips"
+
+
+def test_task_detail_includes_translated_metadata(monkeypatch, tmp_path):
+    configure_tmp_runtime(monkeypatch, tmp_path)
+    task_id = database.create_task("https://www.youtube.com/watch?v=metadataapi")
+    database.update_task(
+        task_id,
+        translated_title="Translated title",
+        translated_description="Translated description",
+    )
+    client = authenticated_client()
+
+    response = client.get(f"/api/tasks/{task_id}")
+
+    assert response.status_code == 200
+    assert response.json()["translated_title"] == "Translated title"
+    assert response.json()["translated_description"] == "Translated description"
+
+
+def test_task_thumbnail_serves_only_file_from_task_media_directory(monkeypatch, tmp_path):
+    configure_tmp_runtime(monkeypatch, tmp_path)
+    task_id = database.create_task("https://www.youtube.com/watch?v=thumbnailapi")
+    session = config.WORKFOLDER / "uploader" / "thumbnail__thumbnailapi"
+    media = session / "media"
+    media.mkdir(parents=True)
+    thumbnail = media / "thumbnail.jpg"
+    thumbnail.write_bytes(b"jpeg-data")
+    database.update_task(
+        task_id,
+        session_path=str(session),
+        thumbnail_path=str(thumbnail),
+    )
+    client = authenticated_client()
+
+    response = client.get(f"/api/tasks/{task_id}/artifact/thumbnail")
+
+    assert response.status_code == 200
+    assert response.content == b"jpeg-data"
+    assert response.headers["content-type"] == "image/jpeg"
+    assert response.headers["cache-control"] == "no-store"
+
+    outside = tmp_path / "outside.jpg"
+    outside.write_bytes(b"outside")
+    database.update_task(task_id, thumbnail_path=str(outside))
+    assert client.get(f"/api/tasks/{task_id}/artifact/thumbnail").status_code == 404
 
 
 def test_delete_task_removes_session_log_and_record(monkeypatch, tmp_path):

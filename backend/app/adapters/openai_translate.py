@@ -20,6 +20,7 @@ API_SETTING_KEYS = ("base_url", "api_key", "model")
 PREPROCESS_RETRY = 2
 TRANSLATE_RETRY = 3
 DESCRIPTION_LIMIT = 500
+PREPROCESS_DESCRIPTION_LIMIT = 5000
 DEFAULT_CONCURRENCY = 50
 MAX_CHUNK_CONCURRENCY = 4
 TRANSLATE_CHUNK_MAX_SENTENCES = 20
@@ -38,6 +39,8 @@ class CorrectionItem(BaseModel):
 
 
 class PreprocessResponse(BaseModel):
+    translated_title: str = ""
+    translated_description: str = ""
     summary: str = ""
     hotwords: list[HotwordItem] = Field(default_factory=list)
     corrections: list[CorrectionItem] = Field(default_factory=list)
@@ -130,10 +133,14 @@ def _format_terms(items: list, fmt: str, empty: str) -> str:
     return "\n".join(fmt.format(**item.model_dump()) for item in items)
 
 
-def _meta_view(meta: dict[str, Any]) -> dict[str, str]:
+def _meta_view(
+    meta: dict[str, Any],
+    *,
+    description_limit: int = DESCRIPTION_LIMIT,
+) -> dict[str, str]:
     description = (meta.get("description") or "").strip()
-    if len(description) > DESCRIPTION_LIMIT:
-        description = description[:DESCRIPTION_LIMIT] + "..."
+    if len(description) > description_limit:
+        description = description[:description_limit] + "..."
     return {
         "title": str(meta.get("title") or "").strip() or "(unknown)",
         "uploader": str(meta.get("uploader") or "").strip() or "(unknown)",
@@ -154,7 +161,7 @@ def preprocess(
         src_language_name=source.asr_language_name,
         dst_language_name=source.target_language_name,
         full_text=full_text,
-        **_meta_view(meta),
+        **_meta_view(meta, description_limit=PREPROCESS_DESCRIPTION_LIMIT),
     )
     client = _client(base_url, api_key)
     last_error: Exception | None = None
