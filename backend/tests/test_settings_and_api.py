@@ -159,7 +159,66 @@ def test_task_id_is_video_id_and_dedupes_existing(monkeypatch, tmp_path):
     assert second.status_code == 201
     assert first.json()["id"] == "abcdefghijk"
     assert second.json()["id"] == "abcdefghijk"
+    assert first.json()["dubbing_enabled"] is True
+    assert second.json()["dubbing_enabled"] is True
     assert enqueued == ["abcdefghijk"]
+
+
+def test_same_video_with_different_dubbing_setting_returns_conflict(monkeypatch, tmp_path):
+    configure_tmp_runtime(monkeypatch, tmp_path)
+    enqueued: list[str] = []
+    monkeypatch.setattr(main.worker, "enqueue", lambda task_id: enqueued.append(task_id))
+    client = authenticated_client()
+    url = "https://www.youtube.com/watch?v=abcdefghijk"
+
+    first = client.post("/api/tasks", json={"url": url, "dubbing_enabled": False})
+    duplicate = client.post("/api/tasks", json={"url": url, "dubbing_enabled": False})
+    conflicting = client.post("/api/tasks", json={"url": url, "dubbing_enabled": True})
+
+    assert first.status_code == 201
+    assert first.json()["dubbing_enabled"] is False
+    assert duplicate.status_code == 201
+    assert duplicate.json()["id"] == first.json()["id"]
+    assert conflicting.status_code == 409
+    assert "different dubbing setting" in conflicting.json()["detail"]
+    assert enqueued == ["abcdefghijk"]
+
+
+def test_init_db_migrates_existing_tasks_to_dubbing_enabled(monkeypatch, tmp_path):
+    db_path = tmp_path / "legacy.sqlite"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE tasks (
+              id TEXT PRIMARY KEY,
+              url TEXT NOT NULL,
+              title TEXT,
+              status TEXT NOT NULL,
+              current_stage TEXT,
+              session_path TEXT,
+              final_video_path TEXT,
+              error_message TEXT,
+              created_at TEXT NOT NULL,
+              started_at TEXT,
+              completed_at TEXT,
+              execution_mode TEXT NOT NULL DEFAULT 'auto'
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO tasks (id, url, status, current_stage, created_at, execution_mode)
+            VALUES ('legacy', 'https://example.com/legacy', 'queued', 'download', '2024-01-01', 'auto')
+            """
+        )
+    monkeypatch.setattr(database, "DB_PATH", db_path)
+
+    database.init_db()
+
+    with sqlite3.connect(db_path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
+    assert "dubbing_enabled" in columns
+    assert database.get_task("legacy")["dubbing_enabled"] is True
 
 
 def test_different_videos_create_separate_tasks(monkeypatch, tmp_path):
@@ -240,6 +299,7 @@ def test_list_tasks_returns_history_newest_first(monkeypatch, tmp_path):
     assert body["page_size"] == 20
     assert "stages" not in body["tasks"][0]
     assert set(body["tasks"][0].keys()) >= {"id", "url", "title", "status", "final_video_path"}
+    assert body["tasks"][0]["dubbing_enabled"] is True
 
 
 def test_list_tasks_search_matches_title_url_and_id(monkeypatch, tmp_path):
@@ -452,7 +512,11 @@ def test_rerun_task_purges_session_and_requeues(monkeypatch, tmp_path):
     enqueued: list[str] = []
     monkeypatch.setattr(main.worker, "enqueue", lambda task_id: enqueued.append(task_id))
 
-    task_id = database.create_task("https://www.youtube.com/watch?v=rerunvideox", task_id="rerunvideox")
+    task_id = database.create_task(
+        "https://www.youtube.com/watch?v=rerunvideox",
+        task_id="rerunvideox",
+        dubbing_enabled=False,
+    )
     session = config.WORKFOLDER / "uploader" / "title__rerunvideox"
     (session / "media").mkdir(parents=True)
     (session / "media" / "video_source.mp4").write_bytes(b"old")
@@ -468,6 +532,7 @@ def test_rerun_task_purges_session_and_requeues(monkeypatch, tmp_path):
     assert body["id"] == task_id
     assert body["status"] == "queued"
     assert body["session_path"] is None
+    assert body["dubbing_enabled"] is False
     assert enqueued == [task_id]
     assert not session.exists()
     assert not log_file.exists()
@@ -1300,6 +1365,22 @@ def test_upload_local_video_creates_task_and_saved_file(monkeypatch, tmp_path):
     saved = list((config.WORKFOLDER / "_uploads" / body["id"] / "video").iterdir())
     assert len(saved) == 1
     assert saved[0].read_bytes() == b"mp4data"
+
+
+def test_upload_local_video_accepts_disabled_dubbing(monkeypatch, tmp_path):
+    configure_tmp_runtime(monkeypatch, tmp_path)
+    monkeypatch.setattr(main.worker, "enqueue", lambda _task_id: None)
+    client = authenticated_client()
+
+    response = client.post(
+        "/api/tasks/upload",
+        data={"direction": "en-zh", "dubbing_enabled": "false"},
+        files={"file": ("clip.mp4", b"mp4data", "video/mp4")},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["dubbing_enabled"] is False
+    assert database.get_task(response.json()["id"])["dubbing_enabled"] is False
 
 
 def test_frontend_video_accept_contract_matches_backend_allowlist():

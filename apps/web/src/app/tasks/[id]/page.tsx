@@ -5,6 +5,7 @@ import { use, useCallback, useMemo, useState } from "react"
 import {
   CheckCircle2,
   Circle,
+  CircleMinus,
   Download,
   FileText,
   Loader2,
@@ -58,6 +59,7 @@ function stageIcon(status: StageStatus) {
   if (status === "succeeded") return <CheckCircle2 className="size-5 text-[#00aeec]" />
   if (status === "failed") return <XCircle className="size-5 text-[#ff0033]" />
   if (status === "running") return <Loader2 className="size-5 animate-spin text-[#fb7299]" />
+  if (status === "skipped") return <CircleMinus className="size-5 text-muted-foreground" />
   return <Circle className="size-5 text-muted-foreground" />
 }
 
@@ -215,7 +217,9 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
 
   const progress = useMemo(() => {
     if (!task?.stages?.length) return 0
-    const completed = task.stages.filter((stage) => stage.status === "succeeded").length
+    const completed = task.stages.filter(
+      (stage) => stage.status === "succeeded" || stage.status === "skipped",
+    ).length
     return Math.round((completed / task.stages.length) * 100)
   }, [task])
 
@@ -272,6 +276,8 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
                 <dd>
                   {task.execution_mode === "manual" ? t.task.executionManual : t.task.executionAuto}
                 </dd>
+                <dt className="text-muted-foreground">{t.task.finalAudioMode}</dt>
+                <dd>{task.dubbing_enabled !== false ? t.task.dubbedAudio : t.task.originalAudio}</dd>
                 {task.session_path ? (
                   <>
                     <dt className="text-muted-foreground">{t.task.session}</dt>
@@ -326,7 +332,8 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
                 {task.stages.map((stage, index) => {
                   const stageProgress = normalizeProgress(stage.progress)
                   const showRedo =
-                    canRedoStage && (stage.status === "succeeded" || stage.status === "failed")
+                    canRedoStage && stage.status !== "skipped" &&
+                    (stage.status === "succeeded" || stage.status === "failed")
                   return (
                     <li
                       key={stage.name}

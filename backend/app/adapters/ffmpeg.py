@@ -14,6 +14,10 @@ SUBTITLE_MIN_FRAGMENT_LEN = 5
 SUBTITLE_MIN_DURATION_MS = 200
 SUBTITLE_TAIL_BUFFER_MS = 100
 SUBTITLE_DURATION_FLOOR_MS = 600
+MEDIA_MIN_DURATION_SECONDS = 0.05
+MEDIA_MAX_DURATION_TOLERANCE_SECONDS = 2.0
+MEDIA_DURATION_TOLERANCE_RATIO = 0.05
+NATIVE_PROCESS_CRASH_THRESHOLD = 0xC0000000
 
 
 SUBTITLE_FONTS = {
@@ -247,24 +251,150 @@ def subtitle_filter(video_file: Path, subtitle_file: Path, session: Path) -> str
     return f"subtitles=filename='{sub_path}':force_style='{style}'"
 
 
+def _probe_media(media_file: Path) -> tuple[set[str], float]:
+    if not media_file.is_file() or media_file.stat().st_size <= 0:
+        return set(), 0.0
+    result = subprocess.run(
+        [
+            ffprobe_binary(),
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=codec_type:format=duration",
+            "-of",
+            "json",
+            str(media_file),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return set(), 0.0
+    try:
+        data = json.loads(result.stdout)
+        stream_types = {
+            str(stream.get("codec_type") or "").strip()
+            for stream in data.get("streams", [])
+            if str(stream.get("codec_type") or "").strip()
+        }
+        duration = float(data.get("format", {}).get("duration") or 0)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return set(), 0.0
+    return stream_types, duration
+
+
+def _minimum_output_duration(reference_duration: float) -> float:
+    if reference_duration <= 0:
+        return MEDIA_MIN_DURATION_SECONDS
+    tolerance = min(
+        MEDIA_MAX_DURATION_TOLERANCE_SECONDS,
+        reference_duration * MEDIA_DURATION_TOLERANCE_RATIO,
+    )
+    return max(MEDIA_MIN_DURATION_SECONDS, reference_duration - tolerance)
+
+
+def _is_valid_media(
+    media_file: Path,
+    expected_streams: set[str],
+    minimum_duration: float = MEDIA_MIN_DURATION_SECONDS,
+) -> bool:
+    stream_types, duration = _probe_media(media_file)
+    return duration >= minimum_duration and expected_streams.issubset(stream_types)
+
+
+def _is_native_process_crash(returncode: int) -> bool:
+    return returncode < 0 or returncode >= NATIVE_PROCESS_CRASH_THRESHOLD
+
+
+def _safe_x264_command(command: list[str]) -> list[str]:
+    safe_command = list(command)
+    safe_command[1:1] = [
+        "-threads",
+        "1",
+        "-filter_threads",
+        "1",
+        "-filter_complex_threads",
+        "1",
+    ]
+    if "-preset" in safe_command:
+        preset_index = safe_command.index("-preset") + 1
+        safe_command[preset_index] = "ultrafast"
+
+    output_index = len(safe_command) - 1
+    if "-x264-params" not in safe_command:
+        safe_command[output_index:output_index] = ["-x264-params", "threads=1"]
+        output_index += 2
+    if "-pix_fmt" not in safe_command:
+        safe_command[output_index:output_index] = ["-pix_fmt", "yuv420p"]
+    return safe_command
+
+
+def _run_verified_output(
+    command: list[str],
+    part_file: Path,
+    final_file: Path,
+    expected_streams: set[str],
+    *,
+    minimum_duration: float = MEDIA_MIN_DURATION_SECONDS,
+    cwd: Path | None = None,
+    native_crash_retry_command: list[str] | None = None,
+) -> None:
+    part_file.unlink(missing_ok=True)
+    try:
+        try:
+            subprocess.run(command, check=True, cwd=cwd)
+        except subprocess.CalledProcessError as exc:
+            if (
+                native_crash_retry_command is None
+                or not _is_native_process_crash(exc.returncode)
+            ):
+                raise
+            part_file.unlink(missing_ok=True)
+            subprocess.run(native_crash_retry_command, check=True, cwd=cwd)
+        if not _is_valid_media(part_file, expected_streams, minimum_duration):
+            expected = ", ".join(sorted(expected_streams))
+            raise RuntimeError(
+                f"FFmpeg output validation failed for {part_file} "
+                f"(expected streams: {expected}, minimum duration: {minimum_duration:.3f}s)."
+            )
+        part_file.replace(final_file)
+    except Exception:
+        part_file.unlink(missing_ok=True)
+        raise
+
+
+def _reuse_valid_final(final_video: Path, minimum_duration: float) -> bool:
+    if _is_valid_media(final_video, {"video", "audio"}, minimum_duration):
+        return True
+    final_video.unlink(missing_ok=True)
+    return False
+
+
 def merge_video(video_file: Path, dubbing_file: Path, bgm_file: Path, timings_file: Path, session: Path) -> Path:
     tmp_dir = session / "tmp"
     media_dir = session / "media"
     tmp_dir.mkdir(parents=True, exist_ok=True)
     media_dir.mkdir(parents=True, exist_ok=True)
     final_video = media_dir / "video_final.mp4"
-    if final_video.exists():
-        return final_video
-
     session_dir = session.resolve()
     video_input = video_file.resolve()
     dubbing_input = dubbing_file.resolve()
     bgm_input = bgm_file.resolve()
+    _, video_duration = _probe_media(video_input)
+    minimum_video_duration = _minimum_output_duration(video_duration)
+    if _reuse_valid_final(final_video, minimum_video_duration):
+        return final_video
+
     subtitles = write_srt(timings_file, session)
     mixed_audio = tmp_dir / "audio_mixed.m4a"
+    mixed_audio_part = tmp_dir / "audio_mixed.part.m4a"
     mixed_audio_output = mixed_audio.resolve()
+    mixed_audio_part_output = mixed_audio_part.resolve()
     final_video_output = final_video.resolve()
-    subprocess.run(
+    final_video_part = media_dir / "video_final.part.mp4"
+    final_video_part_output = final_video_part.resolve()
+    _, bgm_duration = _probe_media(bgm_input)
+    _run_verified_output(
         [
             ffmpeg_binary(),
             "-y",
@@ -278,38 +408,102 @@ def merge_video(video_file: Path, dubbing_file: Path, bgm_file: Path, timings_fi
             "[aout]",
             "-c:a",
             "aac",
-            str(mixed_audio_output),
+            str(mixed_audio_part_output),
         ],
-        check=True,
+        mixed_audio_part_output,
+        mixed_audio_output,
+        {"audio"},
+        minimum_duration=_minimum_output_duration(bgm_duration),
     )
-    subprocess.run(
-        [
-            ffmpeg_binary(),
-            "-y",
-            "-i",
-            str(video_input),
-            "-i",
-            str(mixed_audio_output),
-            "-vf",
-            subtitle_filter(video_input, subtitles, session_dir),
-            "-map",
-            "0:v:0",
-            "-map",
-            "1:a:0",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "fast",
-            "-crf",
-            "23",
-            "-c:a",
-            "aac",
-            "-movflags",
-            "+faststart",
-            "-shortest",
-            str(final_video_output),
-        ],
-        check=True,
+    render_command = [
+        ffmpeg_binary(),
+        "-y",
+        "-i",
+        str(video_input),
+        "-i",
+        str(mixed_audio_output),
+        "-vf",
+        subtitle_filter(video_input, subtitles, session_dir),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "23",
+        "-c:a",
+        "aac",
+        "-movflags",
+        "+faststart",
+        "-shortest",
+        str(final_video_part_output),
+    ]
+    _run_verified_output(
+        render_command,
+        final_video_part_output,
+        final_video_output,
+        {"video", "audio"},
+        minimum_duration=minimum_video_duration,
         cwd=session_dir,
+        native_crash_retry_command=_safe_x264_command(render_command),
+    )
+    return final_video
+
+
+def merge_video_with_original_audio(
+    video_file: Path,
+    translation_file: Path,
+    session: Path,
+) -> Path:
+    media_dir = session / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    final_video = media_dir / "video_final.mp4"
+    session_dir = session.resolve()
+    video_input = video_file.resolve()
+    _, video_duration = _probe_media(video_input)
+    minimum_video_duration = _minimum_output_duration(video_duration)
+    if _reuse_valid_final(final_video, minimum_video_duration):
+        return final_video
+
+    subtitles = write_srt(translation_file, session)
+    final_video_output = final_video.resolve()
+    final_video_part = media_dir / "video_final.part.mp4"
+    final_video_part_output = final_video_part.resolve()
+    render_command = [
+        ffmpeg_binary(),
+        "-y",
+        "-i",
+        str(video_input),
+        "-vf",
+        subtitle_filter(video_input, subtitles, session_dir),
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "23",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-movflags",
+        "+faststart",
+        str(final_video_part_output),
+    ]
+    _run_verified_output(
+        render_command,
+        final_video_part_output,
+        final_video_output,
+        {"video", "audio"},
+        minimum_duration=minimum_video_duration,
+        cwd=session_dir,
+        native_crash_retry_command=_safe_x264_command(render_command),
     )
     return final_video

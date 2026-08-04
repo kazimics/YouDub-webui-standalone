@@ -26,7 +26,7 @@ afterEach(() => {
 })
 
 describe("本地视频字幕选择", () => {
-  it("切换视频后清除旧字幕，提交时不携带上一视频的字幕", async () => {
+  it("切换视频后清除旧字幕，提交时携带关闭配音设置且不携带旧字幕", async () => {
     mocks.fetch.mockImplementation(async (input: RequestInfo | URL) => {
       const path = String(input)
       if (path === "/api/tasks/upload") {
@@ -79,6 +79,7 @@ describe("本地视频字幕选择", () => {
     expect(screen.getByTestId("local-upload-selection")).toHaveTextContent("当前视频关联字幕: 未选择")
     expect(subtitleInput.files).toHaveLength(0)
 
+    await user.click(screen.getByRole("switch", { name: "生成配音" }))
     await user.click(screen.getByRole("button", { name: "创建任务" }))
 
     await waitFor(() => {
@@ -91,7 +92,66 @@ describe("本地视频字幕选择", () => {
     const form = uploadCall?.[1]?.body as FormData
     expect((form.get("file") as File).name).toBe("video-b.mp4")
     expect(form.has("subtitle_file")).toBe(false)
+    expect(form.get("dubbing_enabled")).toBe("false")
     expect(mocks.push).toHaveBeenCalledWith("/tasks/task-b")
+  })
+})
+
+describe("配音开关", () => {
+  it("默认开启，关闭后通过 URL 创建任务会提交 dubbing_enabled=false", async () => {
+    mocks.fetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path === "/api/tasks" && init?.method === "POST") {
+        return new Response(JSON.stringify({ id: "url-task" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      }
+      if (path.startsWith("/api/tasks")) {
+        return new Response(JSON.stringify({
+          tasks: [],
+          total: 0,
+          active_count: 0,
+          page: 1,
+          page_size: 20,
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      }
+      throw new Error(`未预期的请求: ${path}`)
+    })
+    vi.stubGlobal("fetch", mocks.fetch)
+
+    const user = userEvent.setup()
+    render(
+      <LanguageProvider>
+        <Home />
+      </LanguageProvider>,
+    )
+
+    const dubbingSwitch = screen.getByRole("switch", { name: "生成配音" })
+    expect(dubbingSwitch).toBeChecked()
+    expect(screen.getByText("关闭后保留视频原声，仍会翻译并压制字幕。")).toBeInTheDocument()
+
+    await user.click(dubbingSwitch)
+    expect(dubbingSwitch).not.toBeChecked()
+    await user.type(
+      screen.getByLabelText(/YouTube 链接/),
+      "https://www.youtube.com/watch?v=testvideo01",
+    )
+    await user.click(screen.getByRole("button", { name: "创建任务" }))
+
+    await waitFor(() => {
+      expect(mocks.push).toHaveBeenCalledWith("/tasks/url-task")
+    })
+    const createCall = mocks.fetch.mock.calls.find(
+      ([input, init]) => String(input) === "/api/tasks" && init?.method === "POST",
+    )
+    expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
+      execution_mode: "auto",
+      dubbing_enabled: false,
+    })
   })
 })
 

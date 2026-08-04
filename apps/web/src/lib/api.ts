@@ -84,7 +84,7 @@ function requestHeaders(options?: RequestInit) {
   return headers
 }
 
-export type StageStatus = "pending" | "running" | "succeeded" | "failed"
+export type StageStatus = "pending" | "running" | "succeeded" | "failed" | "skipped"
 export type TaskStatus = "queued" | "running" | "paused" | "succeeded" | "failed"
 export type ExecutionMode = "auto" | "manual"
 
@@ -113,6 +113,7 @@ export type Task = {
   started_at: string | null
   completed_at: string | null
   execution_mode: ExecutionMode
+  dubbing_enabled: boolean
   stages: TaskStage[]
 }
 
@@ -199,6 +200,7 @@ export type TaskSummary = {
   started_at: string | null
   completed_at: string | null
   execution_mode?: ExecutionMode
+  dubbing_enabled: boolean
 }
 
 export type TaskListStatus = "all" | TaskStatus
@@ -289,10 +291,18 @@ export function redoStage(taskId: string, stageName: string) {
   return request<Task>(`/api/tasks/${taskId}/stages/${stageName}/redo`, { method: "POST" })
 }
 
-export function createTask(url: string, executionMode: ExecutionMode = "auto") {
+export function createTask(
+  url: string,
+  executionMode: ExecutionMode = "auto",
+  dubbingEnabled = true,
+) {
   return request<Task>("/api/tasks", {
     method: "POST",
-    body: JSON.stringify({ url, execution_mode: executionMode }),
+    body: JSON.stringify({
+      url,
+      execution_mode: executionMode,
+      dubbing_enabled: dubbingEnabled,
+    }),
   })
 }
 
@@ -301,6 +311,7 @@ export async function uploadLocalTask(
   direction: LocalDirection,
   subtitleFile: File | null = null,
   executionMode: ExecutionMode = "auto",
+  dubbingEnabled = true,
 ) {
   const form = new FormData()
   form.append("direction", direction)
@@ -309,6 +320,7 @@ export async function uploadLocalTask(
     form.append("subtitle_file", subtitleFile)
   }
   form.append("execution_mode", executionMode)
+  form.append("dubbing_enabled", String(dubbingEnabled))
 
   const options: RequestInit = {
     method: "POST",

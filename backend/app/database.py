@@ -52,7 +52,8 @@ def init_db() -> None:
               created_at TEXT NOT NULL,
               started_at TEXT,
               completed_at TEXT,
-              execution_mode TEXT NOT NULL DEFAULT 'auto'
+              execution_mode TEXT NOT NULL DEFAULT 'auto',
+              dubbing_enabled INTEGER NOT NULL DEFAULT 1 CHECK (dubbing_enabled IN (0, 1))
             );
 
             CREATE TABLE IF NOT EXISTS task_stages (
@@ -109,6 +110,10 @@ def init_db() -> None:
         if "execution_mode" not in task_columns:
             conn.execute(
                 "ALTER TABLE tasks ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'auto'"
+            )
+        if "dubbing_enabled" not in task_columns:
+            conn.execute(
+                "ALTER TABLE tasks ADD COLUMN dubbing_enabled INTEGER NOT NULL DEFAULT 1"
             )
         stage_columns = {row["name"] for row in conn.execute("PRAGMA table_info(task_stages)").fetchall()}
         if "progress" not in stage_columns:
@@ -274,6 +279,7 @@ def create_task(
     task_id: str | None = None,
     *,
     execution_mode: str = DEFAULT_EXECUTION_MODE,
+    dubbing_enabled: bool = True,
 ) -> str:
     new_id = task_id or str(uuid.uuid4())
     created_at = now_iso()
@@ -281,10 +287,12 @@ def create_task(
     with connect() as conn:
         conn.execute(
             """
-            INSERT INTO tasks (id, url, status, current_stage, created_at, execution_mode)
-            VALUES (?, ?, 'queued', ?, ?, ?)
+            INSERT INTO tasks (
+              id, url, status, current_stage, created_at, execution_mode, dubbing_enabled
+            )
+            VALUES (?, ?, 'queued', ?, ?, ?, ?)
             """,
-            (new_id, url, STAGES[0].name, created_at, mode),
+            (new_id, url, STAGES[0].name, created_at, mode, int(dubbing_enabled)),
         )
         conn.executemany(
             """
@@ -296,12 +304,21 @@ def create_task(
     return new_id
 
 
-def find_task_by_video_id(video_id: str) -> str | None:
+def find_task_by_video_id(
+    video_id: str,
+    *,
+    dubbing_enabled: bool | None = None,
+) -> str | None:
+    where = "(id = ? OR url LIKE ?)"
+    params: list[Any] = [video_id, f"%{video_id}%"]
+    if dubbing_enabled is not None:
+        where += " AND dubbing_enabled = ?"
+        params.append(int(dubbing_enabled))
     with connect() as conn:
         row = conn.execute(
-            "SELECT id FROM tasks WHERE id = ? OR url LIKE ? "
+            f"SELECT id FROM tasks WHERE {where} "
             "ORDER BY created_at DESC, rowid DESC LIMIT 1",
-            (video_id, f"%{video_id}%"),
+            params,
         ).fetchone()
     return row["id"] if row else None
 
@@ -323,8 +340,15 @@ def latest_task_id() -> str | None:
 
 TASK_SUMMARY_COLUMNS = (
     "id, url, title, status, current_stage, final_video_path, error_message, "
-    "created_at, started_at, completed_at, execution_mode"
+    "created_at, started_at, completed_at, execution_mode, dubbing_enabled"
 )
+
+
+def _task_dict(row: sqlite3.Row) -> dict[str, Any]:
+    result = dict(row)
+    result["dubbing_enabled"] = bool(result.get("dubbing_enabled", 1))
+    return result
+
 
 TASK_LIST_SORTS = {
     "created_desc": "created_at DESC, rowid DESC",
@@ -363,7 +387,7 @@ def list_tasks(limit: int = 100) -> list[dict[str, Any]]:
             "ORDER BY created_at DESC, rowid DESC LIMIT ?",
             (limit,),
         ).fetchall()
-    return [dict(row) for row in rows]
+    return [_task_dict(row) for row in rows]
 
 
 def list_tasks_page(
@@ -415,7 +439,7 @@ def list_tasks_page(
         ).fetchall()
 
     return {
-        "tasks": [dict(row) for row in rows],
+        "tasks": [_task_dict(row) for row in rows],
         "total": counts["filtered_total"],
         "active_count": counts["active_count"],
         "page": page,
@@ -448,7 +472,7 @@ def get_task(task_id: str) -> dict[str, Any] | None:
             """,
             (task_id,),
         ).fetchall()
-    result = dict(task)
+    result = _task_dict(task)
     result["stages"] = [dict(stage) for stage in stages]
     return result
 

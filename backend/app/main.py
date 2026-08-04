@@ -63,6 +63,7 @@ def mask_secret(value: str) -> str:
 class TaskCreate(BaseModel):
     url: str
     execution_mode: str = "auto"
+    dubbing_enabled: bool = True
 
 
 class ContinueTaskRequest(BaseModel):
@@ -328,15 +329,29 @@ def create_task(payload: TaskCreate) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    matching_id = database.find_task_by_video_id(
+        validated_url.video_id,
+        dubbing_enabled=payload.dubbing_enabled,
+    )
+    if matching_id:
+        return database.get_task(matching_id)
+
     existing_id = database.find_task_by_video_id(validated_url.video_id)
     if existing_id:
-        return database.get_task(existing_id)
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "A task for this video already exists with a different dubbing setting. "
+                "Delete the existing task before creating it with the new setting."
+            ),
+        )
 
     _ensure_runtime_ready()
     task_id = database.create_task(
         validated_url.url,
         task_id=validated_url.video_id,
         execution_mode=normalize_execution_mode(payload.execution_mode),
+        dubbing_enabled=payload.dubbing_enabled,
     )
     worker.enqueue(task_id)
     return database.get_task(task_id)
@@ -414,6 +429,7 @@ def upload_local_video(
     file: UploadFile = File(...),
     subtitle_file: UploadFile | None = File(None),
     execution_mode: str = Form("auto"),
+    dubbing_enabled: bool = Form(True),
 ) -> dict:
     if direction not in LOCAL_UPLOAD_DIRECTIONS:
         raise HTTPException(status_code=422, detail="Unsupported local video direction.")
@@ -449,6 +465,7 @@ def upload_local_video(
             url,
             task_id=task_id,
             execution_mode=normalized_execution_mode,
+            dubbing_enabled=dubbing_enabled,
         )
         database.update_task(task_id, title=Path(original_name).stem)
         task = database.get_task(task_id)
@@ -538,8 +555,14 @@ def rerun_task(task_id: str) -> dict:
     _ensure_runtime_ready()
     url = task["url"]
     execution_mode = task.get("execution_mode") or database.DEFAULT_EXECUTION_MODE
+    dubbing_enabled = bool(task.get("dubbing_enabled", True))
     _purge_task(task)
-    new_id = database.create_task(url, task_id=task_id, execution_mode=execution_mode)
+    new_id = database.create_task(
+        url,
+        task_id=task_id,
+        execution_mode=execution_mode,
+        dubbing_enabled=dubbing_enabled,
+    )
     worker.enqueue(new_id)
     return database.get_task(new_id)
 

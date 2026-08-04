@@ -34,6 +34,7 @@ function taskWithStatus(status: TaskStatus): Task {
     started_at: null,
     completed_at: null,
     execution_mode: "manual",
+    dubbing_enabled: true,
     stages: [{
       task_id: "task-race",
       name: "download",
@@ -120,5 +121,54 @@ describe("任务详情轮询", () => {
 
     expect(screen.getByText("排队中")).toBeInTheDocument()
     expect(screen.queryByRole("button", { name: "执行下一阶段" })).not.toBeInTheDocument()
+  })
+
+  it("原声模式会展示最终音频模式，并将跳过阶段计入进度且禁止重做", async () => {
+    const originalAudioTask: Task = {
+      ...taskWithStatus("succeeded"),
+      dubbing_enabled: false,
+      stages: [{
+        task_id: "task-race",
+        name: "tts",
+        label: "TTS",
+        status: "skipped",
+        progress: 100,
+        started_at: null,
+        completed_at: null,
+        last_message: null,
+        error_message: null,
+      }],
+    }
+
+    mocks.fetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      const method = init?.method || "GET"
+      if (method === "GET" && path === "/api/tasks/task-race") {
+        return jsonResponse(originalAudioTask)
+      }
+      if (method === "GET" && path === "/api/tasks/task-race/log") {
+        return new Response("done", { status: 200 })
+      }
+      throw new Error(`未预期的请求: ${method} ${path}`)
+    })
+    vi.stubGlobal("fetch", mocks.fetch)
+
+    const params = Promise.resolve({ id: "task-race" })
+    await act(async () => {
+      render(
+        <LanguageProvider>
+          <Suspense fallback={<div>loading</div>}>
+            <TaskDetailPage params={params} />
+          </Suspense>
+        </LanguageProvider>,
+      )
+      await params
+    })
+
+    expect(await screen.findByText("原声（带翻译字幕）")).toBeInTheDocument()
+    expect(screen.getByText("最终音频模式")).toBeInTheDocument()
+    expect(screen.getByText("已跳过")).toBeInTheDocument()
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100")
+    expect(screen.queryByRole("button", { name: "重做" })).not.toBeInTheDocument()
   })
 })

@@ -16,6 +16,9 @@ from .stages import STAGES
 from .youtube import is_local_upload_url
 
 
+DUBBING_STAGES = frozenset({"split_audio", "tts", "merge_audio"})
+
+
 @dataclass
 class PipelineArtifacts:
     session: Path | None = None
@@ -93,6 +96,16 @@ class PipelineRunner:
             validate_runtime_device()
             self.log(f"Device plan: {device_plan_summary()}")
             for stage in STAGES:
+                current_task = database.get_task(self.task_id)
+                dubbing_enabled = bool(
+                    current_task.get("dubbing_enabled", True) if current_task else True
+                )
+                if not dubbing_enabled and stage.name in DUBBING_STAGES:
+                    if self._stage_status(stage.name) != "skipped":
+                        self._skip_stage(stage.name)
+                    else:
+                        self.log(f"[{stage.name}] Skipped because dubbing is disabled")
+                    continue
                 if self._stage_status(stage.name) == "succeeded":
                     database.update_task(self.task_id, current_stage=stage.name)
                     database.update_stage(self.task_id, stage.name, progress=100)
@@ -214,9 +227,25 @@ class PipelineRunner:
         )
         self.log(f"[{stage}] Completed")
 
+    def _skip_stage(self, stage: str) -> None:
+        message = "Skipped because dubbing is disabled"
+        database.update_task(self.task_id, current_stage=stage)
+        database.update_stage(
+            self.task_id,
+            stage,
+            status="skipped",
+            progress=100,
+            completed_at=database.now_iso(),
+            last_message=message,
+            error_message=None,
+        )
+        self.log(f"[{stage}] {message}")
+
     def _restore_cached_stage(self, stage: str, task: dict | None) -> None:
         if not task:
             raise RuntimeError("Missing task while restoring cached pipeline artifacts.")
+        if not bool(task.get("dubbing_enabled", True)) and stage in DUBBING_STAGES:
+            return
         session_path = task.get("session_path")
         if not session_path:
             raise RuntimeError("Missing cached pipeline artifact: session_path")
@@ -430,15 +459,29 @@ class PipelineRunner:
         self.artifacts.timings_file = timings
         self.stage_message("merge_audio", f"Dubbing -> {dubbing.name}, timings -> {timings.name}")
 
-    def _merge_video(self, _: dict) -> None:
-        from .adapters.ffmpeg import merge_video
+    def _merge_video(self, task: dict) -> None:
+        from .adapters.ffmpeg import merge_video, merge_video_with_original_audio
 
         session = _require(self.artifacts.session, "session")
         video_file = _require(self.artifacts.video_file, "video_file")
-        dubbing_file = _require(self.artifacts.dubbing_file, "dubbing_file")
-        bgm_file = _require(self.artifacts.bgm_file, "bgm_file")
-        timings_file = _require(self.artifacts.timings_file, "timings_file")
-        self.artifacts.final_video = merge_video(video_file, dubbing_file, bgm_file, timings_file, session)
+        if bool(task.get("dubbing_enabled", True)):
+            dubbing_file = _require(self.artifacts.dubbing_file, "dubbing_file")
+            bgm_file = _require(self.artifacts.bgm_file, "bgm_file")
+            timings_file = _require(self.artifacts.timings_file, "timings_file")
+            self.artifacts.final_video = merge_video(
+                video_file,
+                dubbing_file,
+                bgm_file,
+                timings_file,
+                session,
+            )
+        else:
+            translation_file = _require(self.artifacts.translation_file, "translation_file")
+            self.artifacts.final_video = merge_video_with_original_audio(
+                video_file,
+                translation_file,
+                session,
+            )
         size_mb = self.artifacts.final_video.stat().st_size / (1024 * 1024)
         self.stage_message("merge_video", f"Final video: {self.artifacts.final_video} ({size_mb:.1f} MB)")
 

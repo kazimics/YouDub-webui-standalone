@@ -40,6 +40,7 @@ import {
   SelectItem,
   SelectTrigger,
 } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100]
 const TASK_SEARCH_MAX_LENGTH = 200
@@ -93,6 +94,7 @@ export default function Home() {
   const [localSubtitleFile, setLocalSubtitleFile] = useState<File | null>(null)
   const [localDirection, setLocalDirection] = useState<LocalDirection>("en-zh")
   const [executionMode, setExecutionMode] = useState<ExecutionMode>("auto")
+  const [dubbingEnabled, setDubbingEnabled] = useState(true)
   const [tasks, setTasks] = useState<TaskSummary[]>([])
   const [taskTotal, setTaskTotal] = useState(0)
   const [activeTaskCount, setActiveTaskCount] = useState<number | null>(null)
@@ -218,8 +220,14 @@ export default function Home() {
     setSubmitting(true)
     try {
       const created = localFile
-        ? await uploadLocalTask(localFile, localDirection, localSubtitleFile, executionMode)
-        : await createTask(submittedUrl, executionMode)
+        ? await uploadLocalTask(
+            localFile,
+            localDirection,
+            localSubtitleFile,
+            executionMode,
+            dubbingEnabled,
+          )
+        : await createTask(submittedUrl, executionMode, dubbingEnabled)
       setYoutubeUrl("")
       setBilibiliUrl("")
       setLocalFile(null)
@@ -362,6 +370,21 @@ export default function Home() {
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+              <div className="flex items-center justify-between gap-4 rounded-lg border border-border/60 bg-muted/30 px-3 py-3">
+                <div className="space-y-1">
+                  <Label htmlFor="dubbing-enabled">{t.home.dubbingEnabledLabel}</Label>
+                  <p id="dubbing-enabled-help" className="text-xs leading-5 text-muted-foreground">
+                    {t.home.dubbingEnabledHelp}
+                  </p>
+                </div>
+                <Switch
+                  id="dubbing-enabled"
+                  checked={dubbingEnabled}
+                  onCheckedChange={setDubbingEnabled}
+                  aria-label={t.home.dubbingEnabledLabel}
+                  aria-describedby="dubbing-enabled-help"
+                />
               </div>
               <div className="flex items-center justify-between gap-3">
                 {activeTaskCount !== null && activeTaskCount > 0 ? (

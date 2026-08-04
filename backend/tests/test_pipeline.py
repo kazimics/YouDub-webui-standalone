@@ -357,6 +357,118 @@ def test_pipeline_manual_switch_to_auto_runs_remaining_stages(monkeypatch, tmp_p
     assert all(stage["status"] == "succeeded" for stage in task["stages"])
 
 
+def test_pipeline_without_dubbing_skips_voice_stages_without_manual_pauses(
+    monkeypatch,
+    tmp_path,
+):
+    configure_db(monkeypatch, tmp_path)
+    task_id = database.create_task(
+        "https://www.youtube.com/watch?v=nodubbingxx",
+        task_id="nodubbingxx",
+        execution_mode="manual",
+        dubbing_enabled=False,
+    )
+    session = _cached_session(tmp_path)
+    (session / "segments" / "vocals").rmdir()
+    (session / "segments" / "tts").rmdir()
+    (session / "tmp" / "audio_dubbing.wav").unlink()
+    (session / "metadata" / "timings.json").unlink()
+    (session / "media" / "video_final.mp4").unlink()
+    database.update_task(task_id, session_path=str(session))
+    for stage in ("download", "separate", "asr", "asr_fix", "translate"):
+        database.update_stage(
+            task_id,
+            stage,
+            status="succeeded",
+            completed_at=database.now_iso(),
+        )
+
+    def fail_voice_stage(self, task):
+        raise AssertionError("disabled voice stages must not run or restore cached output")
+
+    monkeypatch.setattr(PipelineRunner, "_split_audio", fail_voice_stage)
+    monkeypatch.setattr(PipelineRunner, "_tts", fail_voice_stage)
+    monkeypatch.setattr(PipelineRunner, "_merge_audio", fail_voice_stage)
+
+    final_path = session / "media" / "video_final.mp4"
+
+    def merge_video(self, task):
+        assert task["dubbing_enabled"] is False
+        final_path.write_bytes(b"video")
+        self.artifacts.final_video = final_path
+
+    monkeypatch.setattr(PipelineRunner, "_merge_video", merge_video)
+
+    PipelineRunner(task_id).run()
+
+    task = database.get_task(task_id)
+    statuses = {stage["name"]: stage["status"] for stage in task["stages"]}
+    assert task["status"] == "succeeded"
+    assert statuses["split_audio"] == "skipped"
+    assert statuses["tts"] == "skipped"
+    assert statuses["merge_audio"] == "skipped"
+    assert statuses["merge_video"] == "succeeded"
+    assert all(
+        stage["progress"] == 100
+        for stage in task["stages"]
+        if stage["name"] in {"split_audio", "tts", "merge_audio"}
+    )
+
+
+def test_merge_video_without_dubbing_uses_translation_and_original_audio_path(
+    monkeypatch,
+    tmp_path,
+):
+    from backend.app.adapters import ffmpeg
+
+    configure_db(monkeypatch, tmp_path)
+    task_id = database.create_task(
+        "https://www.youtube.com/watch?v=originalaud",
+        task_id="originalaud",
+        dubbing_enabled=False,
+    )
+    task = database.get_task(task_id)
+    session = tmp_path / "session"
+    media = session / "media"
+    metadata = session / "metadata"
+    media.mkdir(parents=True)
+    metadata.mkdir(parents=True)
+    video = media / "video_source.mp4"
+    translation = metadata / "translation.zh.json"
+    video.write_bytes(b"source")
+    translation.write_text('{"translation": []}', encoding="utf-8")
+    final_path = media / "video_final.mp4"
+    captured: dict[str, Path] = {}
+
+    def fail_dubbed_merge(*args, **kwargs):
+        raise AssertionError("dubbed merge path must not run")
+
+    def original_merge(video_file, translation_file, session_dir):
+        captured.update(
+            video_file=video_file,
+            translation_file=translation_file,
+            session=session_dir,
+        )
+        final_path.write_bytes(b"final")
+        return final_path
+
+    monkeypatch.setattr(ffmpeg, "merge_video", fail_dubbed_merge)
+    monkeypatch.setattr(ffmpeg, "merge_video_with_original_audio", original_merge)
+    runner = PipelineRunner(task_id)
+    runner.artifacts.session = session
+    runner.artifacts.video_file = video
+    runner.artifacts.translation_file = translation
+
+    runner._merge_video(task)
+
+    assert captured == {
+        "video_file": video,
+        "translation_file": translation,
+        "session": session,
+    }
+    assert runner.artifacts.final_video == final_path
+
+
 def test_pipeline_uses_uploaded_srt_and_skips_model_stages(monkeypatch, tmp_path):
     configure_db(monkeypatch, tmp_path)
     monkeypatch.setattr(pipeline, "WORKFOLDER", tmp_path)
