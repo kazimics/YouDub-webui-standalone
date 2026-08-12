@@ -93,6 +93,10 @@ class BilibiliCookieUpdate(BaseModel):
     content: str
 
 
+class BilibiliQrPollRequest(BaseModel):
+    qrcode_key: str
+
+
 class BilibiliDraftRequest(BaseModel):
     title: str = ""
     tid: int = 171
@@ -880,6 +884,39 @@ def save_bilibili_cookie(payload: BilibiliCookieUpdate) -> dict:
     else:
         runtime_security.remove_private_file(BILIBILI_COOKIE_PATH, missing_ok=True)
     return get_bilibili_cookie()
+
+
+@app.get("/api/cookies/bilibili/qr")
+def generate_bilibili_qr() -> dict:
+    """生成 B 站扫码登录二维码，返回图片 data URI 与 qrcode_key。"""
+    try:
+        url, qrcode_key = bilibili.generate_qr_code()
+        qr_image = bilibili.render_qr_data_uri(url)
+    except bilibili.BilibiliError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Bilibili request failed: {exc}") from exc
+    return {
+        "qrcode_key": qrcode_key,
+        "qr_image": qr_image,
+        "expires_in": bilibili.QR_EXPIRE_SECONDS,
+    }
+
+
+@app.post("/api/cookies/bilibili/qr/poll")
+def poll_bilibili_qr(payload: BilibiliQrPollRequest) -> dict:
+    """轮询扫码状态；成功后自动写入 B 站 Cookie 文件。"""
+    try:
+        result = bilibili.poll_qr_login(payload.qrcode_key)
+    except bilibili.BilibiliError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Bilibili request failed: {exc}") from exc
+    if result.get("status") == "success":
+        content = bilibili.format_cookie_file(result)
+        runtime_security.atomic_write_private_text(BILIBILI_COOKIE_PATH, content)
+        return {"status": "success", **get_bilibili_cookie()}
+    return result
 
 
 @app.get("/api/settings/openai")

@@ -341,3 +341,184 @@ def test_bilibili_cookie_api_roundtrip(monkeypatch, tmp_path):
     assert response.status_code == 200
     assert response.json()["exists"] is False
 
+class CookieSession(MagicSession):
+    """带 cookie jar 的假会话，用于扫码登录成功场景。"""
+
+    def __init__(self, cookies=None):
+        super().__init__()
+        self.cookies = requests.cookies.RequestsCookieJar()
+        for name, value in (cookies or {}).items():
+            self.cookies.set(name, value, domain=".bilibili.com", path="/")
+
+
+def _clear_qr_sessions():
+    bilibili._qr_sessions.clear()
+
+
+def test_generate_qr_code(monkeypatch):
+    session = MagicSession()
+    session.get_responses = [
+        FakeResponse(
+            json_data={
+                "code": 0,
+                "data": {
+                    "url": "https://passport.bilibili.com/h5-app/passport/login/scan?navhide=1&qrcode_key=key123&from=",
+                    "qrcode_key": "key123",
+                },
+            }
+        )
+    ]
+    monkeypatch.setattr(bilibili, "_qr_session", lambda: session)
+    url, qrcode_key = bilibili.generate_qr_code()
+    assert qrcode_key == "key123"
+    assert "qrcode_key=key123" in url
+    assert bilibili._qr_sessions["key123"][0] is session
+    _clear_qr_sessions()
+
+
+def test_generate_qr_code_raises_when_missing_data(monkeypatch):
+    session = MagicSession()
+    session.get_responses = [FakeResponse(json_data={"code": -101, "message": "expired"})]
+    monkeypatch.setattr(bilibili, "_qr_session", lambda: session)
+    with pytest.raises(BilibiliError) as exc:
+        bilibili.generate_qr_code()
+    assert exc.value.code == -101
+
+
+def test_render_qr_data_uri():
+    data_uri = bilibili.render_qr_data_uri("https://example.com/scan?key=x")
+    assert data_uri.startswith("data:image/png;base64,")
+    import base64
+    payload = data_uri.split(",", 1)[1]
+    assert base64.b64decode(payload)[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_poll_qr_login_pending(monkeypatch):
+    session = MagicSession()
+    session.get_responses = [FakeResponse(json_data={"code": 0, "data": {"code": 86101}})]
+    monkeypatch.setattr(bilibili, "_qr_session", lambda: session)
+    assert bilibili.poll_qr_login("key") == {"status": "pending"}
+
+
+def test_poll_qr_login_scanned(monkeypatch):
+    session = MagicSession()
+    session.get_responses = [FakeResponse(json_data={"code": 0, "data": {"code": 86090}})]
+    monkeypatch.setattr(bilibili, "_qr_session", lambda: session)
+    assert bilibili.poll_qr_login("key") == {"status": "scanned"}
+
+
+def test_poll_qr_login_expired(monkeypatch):
+    session = MagicSession()
+    session.get_responses = [FakeResponse(json_data={"code": 0, "data": {"code": 86038}})]
+    monkeypatch.setattr(bilibili, "_qr_session", lambda: session)
+    assert bilibili.poll_qr_login("key") == {"status": "expired"}
+
+
+def test_poll_qr_login_success_extracts_cookies(monkeypatch):
+    session = CookieSession(
+        cookies={"SESSDATA": "sess%2Bdata", "bili_jct": "jct", "DedeUserID": "123"}
+    )
+    session.get_responses = [FakeResponse(json_data={"code": 0, "data": {"code": 0}})]
+    monkeypatch.setattr(bilibili, "_qr_session", lambda: session)
+    result = bilibili.poll_qr_login("key")
+    assert result["status"] == "success"
+    assert result["SESSDATA"] == "sess%2Bdata"
+    assert result["bili_jct"] == "jct"
+    assert result["DedeUserID"] == "123"
+    assert "key" not in bilibili._qr_sessions
+
+
+def test_poll_qr_login_success_missing_cookie_raises(monkeypatch):
+    session = CookieSession(cookies={})
+    session.get_responses = [FakeResponse(json_data={"code": 0, "data": {"code": 0}})]
+    monkeypatch.setattr(bilibili, "_qr_session", lambda: session)
+    with pytest.raises(BilibiliError) as exc:
+        bilibili.poll_qr_login("key")
+    assert "完整 Cookie" in str(exc.value)
+
+
+def test_format_cookie_file_netscape():
+    text = bilibili.format_cookie_file(
+        {
+            "SESSDATA": "s%2Bd",
+            "bili_jct": "jct",
+            "DedeUserID": "123",
+            "DedeUserID__ckMd5": "md5",
+        }
+    )
+    assert text.startswith("# Netscape HTTP Cookie File")
+    assert ".bilibili.com\tTRUE\t/\tTRUE\t0\tSESSDATA\ts%2Bd" in text
+    assert ".bilibili.com\tTRUE\t/\tTRUE\t0\tbili_jct\tjct" in text
+
+
+def test_bilibili_qr_api_generate(monkeypatch, tmp_path):
+    configure_tmp_runtime(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        main.bilibili,
+        "generate_qr_code",
+        lambda: ("https://passport.bilibili.com/h5-app/passport/login/scan?navhide=1&qrcode_key=key1&from=", "key1"),
+    )
+    monkeypatch.setattr(main.bilibili, "render_qr_data_uri", lambda url: "data:image/png;base64,AAAA")
+    client = authenticated_client()
+    response = client.get("/api/cookies/bilibili/qr")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["qrcode_key"] == "key1"
+    assert body["qr_image"] == "data:image/png;base64,AAAA"
+    assert body["expires_in"] == 180
+
+
+def test_bilibili_qr_api_poll_success_saves_cookie(monkeypatch, tmp_path):
+    configure_tmp_runtime(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        main.bilibili,
+        "poll_qr_login",
+        lambda key: {
+            "status": "success",
+            "SESSDATA": "s%2Bdata",
+            "bili_jct": "jct",
+            "DedeUserID": "1",
+            "DedeUserID__ckMd5": "m",
+        },
+    )
+    client = authenticated_client()
+    response = client.post("/api/cookies/bilibili/qr/poll", json={"qrcode_key": "key1"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "success"
+    assert body["exists"] is True
+    cookie_file = Path(main.BILIBILI_COOKIE_PATH)
+    assert cookie_file.is_file()
+    content = cookie_file.read_text(encoding="utf-8")
+    assert "SESSDATA" in content and "bili_jct" in content
+
+
+def test_bilibili_qr_api_poll_pending(monkeypatch, tmp_path):
+    configure_tmp_runtime(monkeypatch, tmp_path)
+    monkeypatch.setattr(main.bilibili, "poll_qr_login", lambda key: {"status": "pending"})
+    client = authenticated_client()
+    response = client.post("/api/cookies/bilibili/qr/poll", json={"qrcode_key": "key1"})
+    assert response.status_code == 200
+    assert response.json() == {"status": "pending"}
+
+
+def test_bilibili_qr_api_poll_expired(monkeypatch, tmp_path):
+    configure_tmp_runtime(monkeypatch, tmp_path)
+    monkeypatch.setattr(main.bilibili, "poll_qr_login", lambda key: {"status": "expired"})
+    client = authenticated_client()
+    response = client.post("/api/cookies/bilibili/qr/poll", json={"qrcode_key": "key1"})
+    assert response.status_code == 200
+    assert response.json() == {"status": "expired"}
+
+
+def test_bilibili_qr_api_poll_error(monkeypatch, tmp_path):
+    configure_tmp_runtime(monkeypatch, tmp_path)
+
+    def boom(key):
+        raise BilibiliError(-1, "扫码登录成功但未获取到完整 Cookie，请重试")
+
+    monkeypatch.setattr(main.bilibili, "poll_qr_login", boom)
+    client = authenticated_client()
+    response = client.post("/api/cookies/bilibili/qr/poll", json={"qrcode_key": "key1"})
+    assert response.status_code == 502
+    assert "完整 Cookie" in response.json()["detail"]

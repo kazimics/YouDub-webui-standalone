@@ -310,3 +310,110 @@ def create_draft(session: requests.Session, payload: dict[str, Any]) -> int:
     if not draft_id:
         raise BilibiliError(-1, "B 站未返回草稿 ID")
     return int(draft_id)
+
+QR_GENERATE_URL = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate"
+QR_POLL_URL = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll"
+QR_EXPIRE_SECONDS = 180
+
+QR_LOGIN_COOKIES = ("SESSDATA", "bili_jct", "DedeUserID", "DedeUserID__ckMd5")
+
+# 以 qrcode_key 为键暂存登录会话（含创建时间），轮询复用同一会话；过期后清理。
+_qr_sessions: dict[str, tuple[requests.Session, float]] = {}
+
+
+def _qr_session() -> requests.Session:
+    session = requests.Session()
+    session.headers.update(
+        {
+            "User-Agent": BILIBILI_USER_AGENT,
+            "Referer": "https://www.bilibili.com/",
+        }
+    )
+    return session
+
+
+def generate_qr_code() -> tuple[str, str]:
+    """调用 B 站二维码生成接口，返回 (登录链接 url, qrcode_key)。"""
+    session = _qr_session()
+    response = session.get(QR_GENERATE_URL, timeout=REQUEST_TIMEOUT)
+    response.raise_for_status()
+    data = response.json()
+    if data.get("code") != 0 or not data.get("data"):
+        raise BilibiliError.from_response(data)
+    url = data["data"].get("url") or ""
+    qrcode_key = data["data"].get("qrcode_key") or ""
+    if not url or not qrcode_key:
+        raise BilibiliError(-1, "B 站未返回二维码数据")
+    now = time.monotonic()
+    for stale_key in [
+        key
+        for key, (_, created_at) in _qr_sessions.items()
+        if now - created_at > QR_EXPIRE_SECONDS
+    ]:
+        _qr_sessions.pop(stale_key, None)
+    _qr_sessions[qrcode_key] = (session, now)
+    return url, qrcode_key
+
+
+def render_qr_data_uri(content: str) -> str:
+    """把二维码内容渲染为 base64 PNG data URI（qrcode 延迟导入）。"""
+    import qrcode
+
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=8,
+        border=2,
+    )
+    qr.add_data(content)
+    qr.make(fit=True)
+    image = qr.make_image(fill_color="black", back_color="white")
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def _extract_login_cookies(session: requests.Session) -> dict[str, str]:
+    cookies: dict[str, str] = {}
+    for name in QR_LOGIN_COOKIES:
+        value = session.cookies.get(name)
+        if value:
+            cookies[name] = value
+    return cookies
+
+
+def poll_qr_login(qrcode_key: str) -> dict[str, Any]:
+    """轮询扫码状态，成功时返回含 SESSDATA/bili_jct 的 cookie 字典。"""
+    entry = _qr_sessions.get(qrcode_key)
+    session = entry[0] if entry is not None else _qr_session()
+    response = session.get(
+        QR_POLL_URL, params={"qrcode_key": qrcode_key}, timeout=REQUEST_TIMEOUT
+    )
+    response.raise_for_status()
+    data = response.json()
+    if data.get("code") != 0:
+        raise BilibiliError.from_response(data)
+    inner = data.get("data") or {}
+    status_code = inner.get("code")
+    if status_code == 0:
+        _qr_sessions.pop(qrcode_key, None)
+        cookies = _extract_login_cookies(session)
+        if not cookies.get("SESSDATA") or not cookies.get("bili_jct"):
+            raise BilibiliError(-1, "扫码登录成功但未获取到完整 Cookie，请重试")
+        return {"status": "success", **cookies}
+    if status_code == 86090:
+        return {"status": "scanned"}
+    if status_code == 86038:
+        _qr_sessions.pop(qrcode_key, None)
+        return {"status": "expired"}
+    return {"status": "pending"}
+
+
+def format_cookie_file(cookies: dict[str, str]) -> str:
+    """把扫码登录得到的 cookie 格式化为 Netscape 格式文本。"""
+    lines = ["# Netscape HTTP Cookie File", ""]
+    for name in QR_LOGIN_COOKIES:
+        value = cookies.get(name)
+        if value:
+            lines.append(f".bilibili.com\tTRUE\t/\tTRUE\t0\t{name}\t{value}")
+    return "\n".join(lines) + "\n"

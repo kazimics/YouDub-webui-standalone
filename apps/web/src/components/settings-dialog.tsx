@@ -1,15 +1,17 @@
 "use client"
 
 import { FormEvent, useEffect, useState } from "react"
-import { Eye, EyeOff, RefreshCw, Settings } from "lucide-react"
+import { Eye, EyeOff, QrCode, RefreshCw, Settings } from "lucide-react"
 
 import {
   ApiError,
   getBilibiliCookieInfo,
+  getBilibiliQr,
   getCookieInfo,
   getOpenAIModels,
   getOpenAISettings,
   getYtdlpSettings,
+  pollBilibiliQr,
   saveBilibiliCookie,
   saveCookie,
   saveOpenAISettings,
@@ -88,6 +90,13 @@ export function SettingsDialog() {
   const [apiKeyDirty, setApiKeyDirty] = useState(false)
   const [saveResults, setSaveResults] = useState<SaveResult[]>([])
   const [saving, setSaving] = useState(false)
+  const [qrOpen, setQrOpen] = useState(false)
+  const [qrImage, setQrImage] = useState("")
+  const [qrKey, setQrKey] = useState("")
+  const [qrStatus, setQrStatus] = useState<
+    "loading" | "pending" | "scanned" | "expired" | "success" | "error"
+  >("loading")
+  const [qrError, setQrError] = useState("")
 
   const cookieValue =
     settings.cookie === SAVED_COOKIE_SENTINEL ? t.settings.savedCookie : settings.cookie
@@ -259,6 +268,59 @@ export function SettingsDialog() {
     }
   }
 
+  async function startQrLogin() {
+    setQrStatus("loading")
+    setQrImage("")
+    setQrKey("")
+    setQrError("")
+    setQrOpen(true)
+    try {
+      const info = await getBilibiliQr()
+      setQrKey(info.qrcode_key)
+      setQrImage(info.qr_image)
+      setQrStatus("pending")
+    } catch (err) {
+      setQrStatus("error")
+      setQrError(err instanceof Error ? err.message : t.settings.bilibiliQrLoginError)
+    }
+  }
+
+  useEffect(() => {
+    if (!qrOpen || !qrKey || (qrStatus !== "pending" && qrStatus !== "scanned")) return
+    const timer = window.setInterval(async () => {
+      try {
+        const result = await pollBilibiliQr(qrKey)
+        if (result.status === "scanned") {
+          setQrStatus("scanned")
+        } else if (result.status === "expired") {
+          setQrStatus("expired")
+        } else if (result.status === "success") {
+          setQrStatus("success")
+          setBilibiliCookieDirty(false)
+          const info = await getBilibiliCookieInfo()
+          setSettings((current) => ({
+            ...current,
+            bilibiliCookie: info.exists ? SAVED_BILIBILI_COOKIE_SENTINEL : "",
+          }))
+          window.setTimeout(() => setQrOpen(false), 1200)
+        }
+      } catch (err) {
+        setQrStatus("error")
+        setQrError(err instanceof Error ? err.message : t.settings.bilibiliQrLoginError)
+      }
+    }, 2000)
+    return () => window.clearInterval(timer)
+  }, [qrOpen, qrKey, qrStatus, t])
+
+  function qrStatusText() {
+    if (qrStatus === "pending") return t.settings.bilibiliQrLoginPending
+    if (qrStatus === "scanned") return t.settings.bilibiliQrLoginScanned
+    if (qrStatus === "expired") return t.settings.bilibiliQrLoginExpired
+    if (qrStatus === "success") return t.settings.bilibiliQrLoginSuccess
+    if (qrStatus === "error") return qrError || t.settings.bilibiliQrLoginError
+    return t.common.loading
+  }
+
   const saveSectionLabels: Record<SaveSection, string> = {
     cookie: t.settings.cookie,
     bilibili: t.settings.bilibiliSaveSection,
@@ -331,7 +393,18 @@ export function SettingsDialog() {
                 />
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="bilibiliCookie">{t.settings.bilibiliCookie}</Label>
+                <div className="flex items-center justify-between gap-2">
+                  <Label htmlFor="bilibiliCookie">{t.settings.bilibiliCookie}</Label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={startQrLogin}
+                  >
+                    <QrCode className="size-4" />
+                    {t.settings.bilibiliQrLogin}
+                  </Button>
+                </div>
                 <Textarea
                   id="bilibiliCookie"
                   value={bilibiliCookieValue}
@@ -500,6 +573,48 @@ export function SettingsDialog() {
           </DialogFooter>
         </form>
       </DialogContent>
+
+      <Dialog open={qrOpen} onOpenChange={setQrOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{t.settings.bilibiliQrLoginTitle}</DialogTitle>
+            <DialogDescription>{t.settings.bilibiliQrLoginDescription}</DialogDescription>
+          </DialogHeader>
+          <div className="grid place-items-center gap-3 py-2">
+            {qrImage ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={qrImage}
+                alt={t.settings.bilibiliQrLogin}
+                className="size-56 rounded-md border"
+              />
+            ) : (
+              <div className="grid size-56 place-items-center rounded-md border text-sm text-muted-foreground">
+                {t.common.loading}
+              </div>
+            )}
+            <p
+              role="status"
+              className={
+                qrStatus === "error" || qrStatus === "expired"
+                  ? "text-sm text-red-700"
+                  : qrStatus === "success"
+                    ? "text-sm text-emerald-700"
+                    : "text-sm text-muted-foreground"
+              }
+            >
+              {qrStatusText()}
+            </p>
+            {qrStatus === "expired" || qrStatus === "error" ? (
+              <Button type="button" variant="secondary" onClick={startQrLogin}>
+                <RefreshCw className="size-4" />
+                {t.settings.bilibiliQrLoginRetry}
+              </Button>
+            ) : null}
+          </div>
+          <DialogFooter showCloseButton />
+        </DialogContent>
+      </Dialog>
     </Dialog>
   )
 }

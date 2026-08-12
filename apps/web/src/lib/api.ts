@@ -399,6 +399,29 @@ export function saveBilibiliCookie(content: string) {
   })
 }
 
+export type BilibiliQrInfo = {
+  qrcode_key: string
+  qr_image: string
+  expires_in: number
+}
+
+export type BilibiliQrStatus = "pending" | "scanned" | "expired" | "success"
+
+export type BilibiliQrPollResult = CookieInfo & {
+  status: BilibiliQrStatus
+}
+
+export function getBilibiliQr() {
+  return request<BilibiliQrInfo>("/api/cookies/bilibili/qr")
+}
+
+export function pollBilibiliQr(qrcodeKey: string) {
+  return request<BilibiliQrPollResult>("/api/cookies/bilibili/qr/poll", {
+    method: "POST",
+    body: JSON.stringify({ qrcode_key: qrcodeKey }),
+  })
+}
+
 export type BilibiliDraftResult = {
   draft_id: number
   aid: number

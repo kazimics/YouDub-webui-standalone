@@ -21,3 +21,4 @@ audiostretchy
 numpy
 pytest
 httpx[socks]
+qrcode[pil]

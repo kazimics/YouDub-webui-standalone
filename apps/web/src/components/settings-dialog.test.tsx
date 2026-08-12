@@ -203,4 +203,84 @@ describe("设置分项保存反馈", () => {
     ).join("\n")
     expect(sensitiveInputValues).not.toContain("bili-secret")
   })
+
+  it("扫码登录成功后自动保存 B 站 Cookie", async () => {
+    let qrPollCalls = 0
+    let bilibiliExists = false
+    mocks.fetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      const method = init?.method || "GET"
+      if (method === "GET" && path === "/api/cookies/youtube") {
+        return jsonResponse({ exists: false, size: 0, updated_at: null, content: "" })
+      }
+      if (method === "GET" && path === "/api/cookies/bilibili") {
+        return jsonResponse(
+          bilibiliExists
+            ? { exists: true, size: 88, updated_at: 3, content: "" }
+            : { exists: false, size: 0, updated_at: null, content: "" },
+        )
+      }
+      if (method === "GET" && path === "/api/settings/openai") {
+        return jsonResponse({
+          base_url: "https://api.openai.com/v1",
+          api_key: "",
+          has_api_key: false,
+          model: "gpt-4o-mini",
+          translate_concurrency: "50",
+        })
+      }
+      if (method === "GET" && path === "/api/settings/ytdlp") {
+        return jsonResponse({ proxy_port: "" })
+      }
+      if (method === "GET" && path === "/api/cookies/bilibili/qr") {
+        return jsonResponse({
+          qrcode_key: "key1",
+          qr_image: "data:image/png;base64,AAAA",
+          expires_in: 180,
+        })
+      }
+      if (method === "POST" && path === "/api/cookies/bilibili/qr/poll") {
+        qrPollCalls += 1
+        if (qrPollCalls >= 2) {
+          bilibiliExists = true
+          return jsonResponse({
+            status: "success",
+            exists: true,
+            size: 88,
+            updated_at: 3,
+            content: "",
+          })
+        }
+        return jsonResponse({
+          status: "scanned",
+          exists: false,
+          size: 0,
+          updated_at: null,
+          content: "",
+        })
+      }
+      throw new Error(`未预期的请求: ${method} ${path}`)
+    })
+    vi.stubGlobal("fetch", mocks.fetch)
+
+    const user = userEvent.setup()
+    render(
+      <LanguageProvider>
+        <SettingsDialog />
+      </LanguageProvider>,
+    )
+
+    await user.click(screen.getByRole("button", { name: "设置" }))
+    await user.click(await screen.findByRole("button", { name: "扫码登录" }))
+    await screen.findByRole("img", { name: "扫码登录" })
+    expect(screen.getByRole("status")).toHaveTextContent("等待扫码...")
+
+    const bilibiliInput = screen.getByLabelText("B 站 Cookie")
+    await waitFor(
+      () => expect(bilibiliInput).toHaveValue("******** 已保存 B 站 Cookie ********"),
+      { timeout: 8000 },
+    )
+    expect(qrPollCalls).toBeGreaterThanOrEqual(2)
+  }, 15000)
+
 })

@@ -205,6 +205,16 @@ const messages: Record<UiLanguage, Messages> = {
       bilibiliCookiePlaceholder:
         "Paste Bilibili Netscape cookie (SESSDATA / bili_jct)",
       bilibiliSaveSection: "Bilibili cookie",
+      bilibiliQrLogin: "QR code login",
+      bilibiliQrLoginTitle: "Scan with Bilibili app",
+      bilibiliQrLoginDescription:
+        "Open Bilibili app, scan the QR code and confirm. The cookie will be saved automatically.",
+      bilibiliQrLoginPending: "Waiting for scan...",
+      bilibiliQrLoginScanned: "Scanned, please confirm on your phone",
+      bilibiliQrLoginExpired: "QR code expired, please regenerate",
+      bilibiliQrLoginSuccess: "Login successful, cookie saved",
+      bilibiliQrLoginRetry: "Regenerate",
+      bilibiliQrLoginError: "QR code login failed",
       saveSucceeded: "Saved",
       saveFailed: "Failed",
       saveUnchanged: "Unchanged",
@@ -421,6 +431,16 @@ const messages: Record<UiLanguage, Messages> = {
       bilibiliCookiePlaceholder:
         "粘贴 B 站 Netscape 格式 Cookie（SESSDATA / bili_jct）",
       bilibiliSaveSection: "B 站 Cookie",
+      bilibiliQrLogin: "扫码登录",
+      bilibiliQrLoginTitle: "使用 B 站 App 扫码",
+      bilibiliQrLoginDescription:
+        "打开 B 站 App 扫描二维码并确认登录，Cookie 将自动保存。",
+      bilibiliQrLoginPending: "等待扫码...",
+      bilibiliQrLoginScanned: "已扫码，请在手机上确认",
+      bilibiliQrLoginExpired: "二维码已失效，请重新生成",
+      bilibiliQrLoginSuccess: "登录成功，Cookie 已保存",
+      bilibiliQrLoginRetry: "重新生成",
+      bilibiliQrLoginError: "扫码登录失败",
       saveSucceeded: "保存成功",
       saveFailed: "保存失败",
       saveUnchanged: "未修改",
