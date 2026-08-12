@@ -95,8 +95,8 @@ describe("本地视频字幕选择", () => {
     expect(form.get("dubbing_enabled")).toBe("false")
     expect(form.get("subtitle_zh_font")).toBe("Noto Sans CJK SC")
     expect(form.get("subtitle_en_font")).toBe("Arial")
-    expect(form.get("subtitle_zh_font_size")).toBe("18")
-    expect(form.get("subtitle_en_font_size")).toBe("14")
+    expect(form.get("subtitle_zh_font_size")).toBe("12")
+    expect(form.get("subtitle_en_font_size")).toBe("9")
     expect(mocks.push).toHaveBeenCalledWith("/tasks/task-b")
   })
 })
@@ -194,11 +194,11 @@ describe("字幕样式", () => {
 
     expect(screen.getByTestId("subtitle-preview-zh")).toHaveStyle({
       fontFamily: "Noto Sans CJK SC",
-      fontSize: "4.6875cqw",
+      fontSize: "3.1250cqw",
     })
     expect(screen.getByTestId("subtitle-preview-en")).toHaveStyle({
       fontFamily: "Arial",
-      fontSize: "3.6458cqw",
+      fontSize: "2.3438cqw",
     })
 
     await user.click(screen.getByLabelText("英文字体"))

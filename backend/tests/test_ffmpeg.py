@@ -136,8 +136,8 @@ def test_merge_video_burns_portrait_subtitles(monkeypatch, tmp_path):
     content = ass.read_text(encoding="utf-8")
     assert "PlayResX: 216" in content
     assert "PlayResY: 384" in content
-    assert "Style: Chinese,Noto Sans CJK SC,9" in content
-    assert "Style: English,Arial,7" in content
+    assert "Style: Chinese,Noto Sans CJK SC,6" in content
+    assert "Style: English,Arial,6" in content
     assert ",70,1" in content
     assert r"{\rChinese}你好\N{\rEnglish}Hello" in content
     assert "-c:s" not in final_command

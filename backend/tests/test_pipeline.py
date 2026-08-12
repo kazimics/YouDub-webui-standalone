@@ -543,7 +543,7 @@ def test_merge_video_without_dubbing_uses_translation_and_original_audio_path(
     assert captured["translation_file"] == translation
     assert captured["session"] == session
     assert captured["subtitle_style"].chinese_font == "Noto Sans CJK SC"
-    assert captured["subtitle_style"].english_font_size == 14
+    assert captured["subtitle_style"].english_font_size == 9
     assert runner.artifacts.final_video == final_path
 
 

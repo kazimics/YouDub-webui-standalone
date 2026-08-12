@@ -268,8 +268,8 @@ def test_init_db_migrates_existing_tasks_to_current_schema(monkeypatch, tmp_path
     assert task["thumbnail_path"] is None
     assert task["subtitle_zh_font"] == "Noto Sans CJK SC"
     assert task["subtitle_en_font"] == "Arial"
-    assert task["subtitle_zh_font_size"] == 18
-    assert task["subtitle_en_font_size"] == 14
+    assert task["subtitle_zh_font_size"] == 12
+    assert task["subtitle_en_font_size"] == 9
 
 
 def test_different_videos_create_separate_tasks(monkeypatch, tmp_path):

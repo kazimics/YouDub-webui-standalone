@@ -112,8 +112,8 @@ export type SubtitleStyleInput = {
 export const DEFAULT_SUBTITLE_STYLE: SubtitleStyleInput = {
   subtitle_zh_font: CHINESE_SUBTITLE_FONTS[0],
   subtitle_en_font: ENGLISH_SUBTITLE_FONTS[0],
-  subtitle_zh_font_size: 18,
-  subtitle_en_font_size: 14,
+  subtitle_zh_font_size: 12,
+  subtitle_en_font_size: 9,
 }
 
 export type TaskStage = {

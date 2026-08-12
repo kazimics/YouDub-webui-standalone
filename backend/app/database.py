@@ -50,8 +50,8 @@ def init_db() -> None:
               thumbnail_path TEXT,
               subtitle_zh_font TEXT NOT NULL DEFAULT 'Noto Sans CJK SC',
               subtitle_en_font TEXT NOT NULL DEFAULT 'Arial',
-              subtitle_zh_font_size INTEGER NOT NULL DEFAULT 18,
-              subtitle_en_font_size INTEGER NOT NULL DEFAULT 14,
+              subtitle_zh_font_size INTEGER NOT NULL DEFAULT 12,
+              subtitle_en_font_size INTEGER NOT NULL DEFAULT 9,
               status TEXT NOT NULL,
               current_stage TEXT,
               session_path TEXT,
@@ -131,11 +131,11 @@ def init_db() -> None:
             )
         if "subtitle_zh_font_size" not in task_columns:
             conn.execute(
-                "ALTER TABLE tasks ADD COLUMN subtitle_zh_font_size INTEGER NOT NULL DEFAULT 18"
+                "ALTER TABLE tasks ADD COLUMN subtitle_zh_font_size INTEGER NOT NULL DEFAULT 12"
             )
         if "subtitle_en_font_size" not in task_columns:
             conn.execute(
-                "ALTER TABLE tasks ADD COLUMN subtitle_en_font_size INTEGER NOT NULL DEFAULT 14"
+                "ALTER TABLE tasks ADD COLUMN subtitle_en_font_size INTEGER NOT NULL DEFAULT 9"
             )
         if "execution_mode" not in task_columns:
             conn.execute(
