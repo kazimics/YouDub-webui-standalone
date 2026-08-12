@@ -31,6 +31,9 @@ describe("设置分项保存反馈", () => {
       if (method === "GET" && path === "/api/cookies/youtube") {
         return jsonResponse({ exists: true, size: 128, updated_at: 1, content: "" })
       }
+      if (method === "GET" && path === "/api/cookies/bilibili") {
+        return jsonResponse({ exists: false, size: 0, updated_at: null, content: "" })
+      }
       if (method === "GET" && path === "/api/settings/openai") {
         return jsonResponse({
           base_url: "https://api.openai.com/v1",
@@ -108,6 +111,7 @@ describe("设置分项保存反馈", () => {
 
     for (const path of [
       "/api/cookies/youtube",
+      "/api/cookies/bilibili",
       "/api/settings/openai",
       "/api/settings/ytdlp",
     ]) {
@@ -123,5 +127,80 @@ describe("设置分项保存反馈", () => {
     ).join("\n")
     expect(sensitiveInputValues).not.toContain("cookie-secret")
     expect(sensitiveInputValues).not.toContain("sk-secret")
+  })
+
+  it("保存 B 站 Cookie 后显示已保存哨兵文案并调用保存接口", async () => {
+    let bilibiliExists = false
+    mocks.fetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      const method = init?.method || "GET"
+      if (method === "GET" && path === "/api/cookies/youtube") {
+        return jsonResponse({ exists: false, size: 0, updated_at: null, content: "" })
+      }
+      if (method === "GET" && path === "/api/cookies/bilibili") {
+        return jsonResponse(
+          bilibiliExists
+            ? { exists: true, size: 88, updated_at: 3, content: "" }
+            : { exists: false, size: 0, updated_at: null, content: "" },
+        )
+      }
+      if (method === "GET" && path === "/api/settings/openai") {
+        return jsonResponse({
+          base_url: "https://api.openai.com/v1",
+          api_key: "",
+          has_api_key: false,
+          model: "gpt-4o-mini",
+          translate_concurrency: "50",
+        })
+      }
+      if (method === "GET" && path === "/api/settings/ytdlp") {
+        return jsonResponse({ proxy_port: "" })
+      }
+      if (method === "POST" && path === "/api/cookies/bilibili") {
+        bilibiliExists = true
+        return jsonResponse({ exists: true, size: 88, updated_at: 3, content: "" })
+      }
+      if (method === "POST" && path === "/api/settings/openai") {
+        return jsonResponse({
+          base_url: "https://api.openai.com/v1",
+          api_key: "",
+          has_api_key: false,
+          model: "gpt-4o-mini",
+          translate_concurrency: "50",
+        })
+      }
+      if (method === "POST" && path === "/api/settings/ytdlp") {
+        return jsonResponse({ proxy_port: "" })
+      }
+      throw new Error(`未预期的请求: ${method} ${path}`)
+    })
+    vi.stubGlobal("fetch", mocks.fetch)
+
+    const user = userEvent.setup()
+    render(
+      <LanguageProvider>
+        <SettingsDialog />
+      </LanguageProvider>,
+    )
+
+    await user.click(screen.getByRole("button", { name: "设置" }))
+    const bilibiliInput = await screen.findByLabelText("B 站 Cookie")
+    await user.type(bilibiliInput, "bili-secret")
+    await user.click(screen.getByRole("button", { name: "保存设置" }))
+
+    await waitFor(() => expect(bilibiliInput).toHaveValue("******** 已保存 B 站 Cookie ********"))
+
+    const postBilibili = mocks.fetch.mock.calls.find(
+      ([input, init]) => String(input) === "/api/cookies/bilibili" && init?.method === "POST",
+    )
+    expect(postBilibili).toBeTruthy()
+    const sentBody = JSON.parse(String(postBilibili?.[1]?.body))
+    expect(sentBody.content).toBe("bili-secret")
+
+    const sensitiveInputValues = Array.from(
+      document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea"),
+      (element) => element.value,
+    ).join("\n")
+    expect(sensitiveInputValues).not.toContain("bili-secret")
   })
 })

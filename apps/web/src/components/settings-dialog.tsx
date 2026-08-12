@@ -5,10 +5,12 @@ import { Eye, EyeOff, RefreshCw, Settings } from "lucide-react"
 
 import {
   ApiError,
+  getBilibiliCookieInfo,
   getCookieInfo,
   getOpenAIModels,
   getOpenAISettings,
   getYtdlpSettings,
+  saveBilibiliCookie,
   saveCookie,
   saveOpenAISettings,
   saveYtdlpSettings,
@@ -37,6 +39,7 @@ import { Textarea } from "@/components/ui/textarea"
 
 type SettingsForm = {
   cookie: string
+  bilibiliCookie: string
   baseUrl: string
   apiKey: string
   model: string
@@ -46,9 +49,10 @@ type SettingsForm = {
 
 const SAVED_API_KEY_MASK = "********"
 const SAVED_COOKIE_SENTINEL = "__YOUDUB_SAVED_COOKIE__"
+const SAVED_BILIBILI_COOKIE_SENTINEL = "__YOUDUB_SAVED_BILIBILI_COOKIE__"
 
 type MessageKey = "keySaved"
-type SaveSection = "cookie" | "openai" | "ytdlp"
+type SaveSection = "cookie" | "bilibili" | "openai" | "ytdlp"
 type SaveResult = {
   section: SaveSection
   status: "saved" | "failed" | "unchanged"
@@ -57,6 +61,7 @@ type SaveResult = {
 
 const defaultSettings: SettingsForm = {
   cookie: "",
+  bilibiliCookie: "",
   baseUrl: "https://api.openai.com/v1",
   apiKey: "",
   model: "gpt-4o-mini",
@@ -79,20 +84,31 @@ export function SettingsDialog() {
   const [modelsLoading, setModelsLoading] = useState(false)
   const [showApiKey, setShowApiKey] = useState(false)
   const [cookieDirty, setCookieDirty] = useState(false)
+  const [bilibiliCookieDirty, setBilibiliCookieDirty] = useState(false)
   const [apiKeyDirty, setApiKeyDirty] = useState(false)
   const [saveResults, setSaveResults] = useState<SaveResult[]>([])
   const [saving, setSaving] = useState(false)
 
   const cookieValue =
     settings.cookie === SAVED_COOKIE_SENTINEL ? t.settings.savedCookie : settings.cookie
+  const bilibiliCookieValue =
+    settings.bilibiliCookie === SAVED_BILIBILI_COOKIE_SENTINEL
+      ? t.settings.savedBilibiliCookie
+      : settings.bilibiliCookie
   const visibleMessage = messageKey === "keySaved" ? t.settings.keySaved : message
 
   useEffect(() => {
     if (!open) return
-    Promise.all([getCookieInfo(), getOpenAISettings(), getYtdlpSettings()])
-      .then(([cookie, openai, ytdlp]) => {
+    Promise.all([
+      getCookieInfo(),
+      getBilibiliCookieInfo(),
+      getOpenAISettings(),
+      getYtdlpSettings(),
+    ])
+      .then(([cookie, bilibiliCookie, openai, ytdlp]) => {
         setSettings({
           cookie: cookie.exists ? SAVED_COOKIE_SENTINEL : "",
+          bilibiliCookie: bilibiliCookie.exists ? SAVED_BILIBILI_COOKIE_SENTINEL : "",
           baseUrl: openai.base_url,
           apiKey: openai.has_api_key ? openai.api_key || SAVED_API_KEY_MASK : "",
           model: openai.model,
@@ -103,6 +119,7 @@ export function SettingsDialog() {
         setModelsLoaded(false)
         setShowApiKey(false)
         setCookieDirty(false)
+        setBilibiliCookieDirty(false)
         setApiKeyDirty(false)
         setSaveResults([])
         setMessage("")
@@ -115,16 +132,23 @@ export function SettingsDialog() {
   }, [open])
 
   async function refreshSettingsFromServer() {
-    const [cookieResult, openaiResult, ytdlpResult] = await Promise.allSettled([
-      getCookieInfo(),
-      getOpenAISettings(),
-      getYtdlpSettings(),
-    ])
+    const [cookieResult, bilibiliResult, openaiResult, ytdlpResult] =
+      await Promise.allSettled([
+        getCookieInfo(),
+        getBilibiliCookieInfo(),
+        getOpenAISettings(),
+        getYtdlpSettings(),
+      ])
 
     setSettings((current) => {
       const refreshed = { ...current }
       if (cookieResult.status === "fulfilled") {
         refreshed.cookie = cookieResult.value.exists ? SAVED_COOKIE_SENTINEL : ""
+      }
+      if (bilibiliResult.status === "fulfilled") {
+        refreshed.bilibiliCookie = bilibiliResult.value.exists
+          ? SAVED_BILIBILI_COOKIE_SENTINEL
+          : ""
       }
       if (openaiResult.status === "fulfilled") {
         const openai = openaiResult.value
@@ -140,6 +164,7 @@ export function SettingsDialog() {
     })
 
     if (cookieResult.status === "fulfilled") setCookieDirty(false)
+    if (bilibiliResult.status === "fulfilled") setBilibiliCookieDirty(false)
     if (openaiResult.status === "fulfilled") {
       setApiKeyDirty(false)
       setShowApiKey(false)
@@ -147,7 +172,7 @@ export function SettingsDialog() {
       setModelsLoaded(false)
     }
 
-    return [cookieResult, openaiResult, ytdlpResult].every(
+    return [cookieResult, bilibiliResult, openaiResult, ytdlpResult].every(
       (result) => result.status === "fulfilled",
     )
   }
@@ -179,6 +204,11 @@ export function SettingsDialog() {
       } else {
         results.push({ section: "cookie", status: "unchanged" })
       }
+      if (bilibiliCookieDirty) {
+        await saveSection("bilibili", () => saveBilibiliCookie(settings.bilibiliCookie))
+      } else {
+        results.push({ section: "bilibili", status: "unchanged" })
+      }
       const clearApiKey = apiKeyDirty && !settings.apiKey.trim()
       await saveSection("openai", () => saveOpenAISettings({
         base_url: settings.baseUrl,
@@ -192,9 +222,11 @@ export function SettingsDialog() {
       setSettings((current) => ({
         ...current,
         cookie: cookieDirty ? "" : current.cookie,
+        bilibiliCookie: bilibiliCookieDirty ? "" : current.bilibiliCookie,
         apiKey: apiKeyDirty ? "" : current.apiKey,
       }))
       if (cookieDirty) setCookieDirty(false)
+      if (bilibiliCookieDirty) setBilibiliCookieDirty(false)
       if (apiKeyDirty) setApiKeyDirty(false)
       setShowApiKey(false)
 
@@ -229,6 +261,7 @@ export function SettingsDialog() {
 
   const saveSectionLabels: Record<SaveSection, string> = {
     cookie: t.settings.cookie,
+    bilibili: t.settings.bilibiliSaveSection,
     openai: t.settings.openaiSaveSection,
     ytdlp: t.settings.ytdlpSaveSection,
   }
@@ -294,6 +327,30 @@ export function SettingsDialog() {
                     }))
                   }}
                   placeholder={t.settings.cookiePlaceholder}
+                  className="min-h-44 max-h-[42dvh] overflow-auto font-mono text-xs leading-relaxed"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="bilibiliCookie">{t.settings.bilibiliCookie}</Label>
+                <Textarea
+                  id="bilibiliCookie"
+                  value={bilibiliCookieValue}
+                  onFocus={(event) => {
+                    if (!bilibiliCookieDirty && settings.bilibiliCookie === SAVED_BILIBILI_COOKIE_SENTINEL) {
+                      event.currentTarget.select()
+                    }
+                  }}
+                  onChange={(event) => {
+                    setBilibiliCookieDirty(true)
+                    setSettings((current) => ({
+                      ...current,
+                      bilibiliCookie:
+                        current.bilibiliCookie === SAVED_BILIBILI_COOKIE_SENTINEL
+                          ? event.target.value.replace(t.settings.savedBilibiliCookie, "")
+                          : event.target.value,
+                    }))
+                  }}
+                  placeholder={t.settings.bilibiliCookiePlaceholder}
                   className="min-h-44 max-h-[42dvh] overflow-auto font-mono text-xs leading-relaxed"
                 />
               </div>

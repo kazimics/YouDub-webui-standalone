@@ -388,6 +388,38 @@ export function saveCookie(content: string) {
   })
 }
 
+export function getBilibiliCookieInfo() {
+  return request<CookieInfo>("/api/cookies/bilibili")
+}
+
+export function saveBilibiliCookie(content: string) {
+  return request<CookieInfo>("/api/cookies/bilibili", {
+    method: "POST",
+    body: JSON.stringify({ content }),
+  })
+}
+
+export type BilibiliDraftResult = {
+  draft_id: number
+  aid: number
+  title: string
+  cover: string
+}
+
+export type BilibiliDraftInput = {
+  title: string
+  tid: number
+  tag: string
+  description: string
+}
+
+export function createBilibiliDraft(taskId: string, payload: BilibiliDraftInput) {
+  return request<BilibiliDraftResult>(`/api/tasks/${taskId}/bilibili/draft`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
 export function getOpenAISettings() {
   return request<OpenAISettings>("/api/settings/openai")
 }

@@ -24,6 +24,7 @@ DATA_DIR = REPO_ROOT / "data"
 COOKIE_DIR = DATA_DIR / "cookies"
 DB_PATH = DATA_DIR / "youdub.sqlite"
 YOUTUBE_COOKIE_PATH = COOKIE_DIR / "youtube.txt"
+BILIBILI_COOKIE_PATH = COOKIE_DIR / "bilibili.txt"
 WORKFOLDER = Path(os.getenv("WORKFOLDER", str(REPO_ROOT / "workfolder"))).expanduser()
 LOG_DIR = DATA_DIR / "logs"
 MODEL_CACHE_DIR = Path(os.getenv("MODEL_CACHE_DIR", str(DATA_DIR / "modelscope"))).expanduser()

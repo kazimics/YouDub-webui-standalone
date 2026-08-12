@@ -13,6 +13,7 @@ import {
   Play,
   RotateCw,
   Trash2,
+  Upload,
   XCircle,
 } from "lucide-react"
 
@@ -21,6 +22,7 @@ import {
   StageStatus,
   Task,
   continueTask,
+  createBilibiliDraft,
   deleteTask,
   finalVideoDownloadUrl,
   finalVideoUrl,
@@ -54,8 +56,11 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { Progress } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Textarea } from "@/components/ui/textarea"
 
 function stageIcon(status: StageStatus) {
   if (status === "succeeded") return <CheckCircle2 className="size-5 text-[#00aeec]" />
@@ -100,6 +105,14 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState("")
+  const [bilibiliOpen, setBilibiliOpen] = useState(false)
+  const [bilibiliTitle, setBilibiliTitle] = useState("")
+  const [bilibiliTid, setBilibiliTid] = useState("171")
+  const [bilibiliTag, setBilibiliTag] = useState("")
+  const [bilibiliDescription, setBilibiliDescription] = useState("")
+  const [bilibiliCreating, setBilibiliCreating] = useState(false)
+  const [bilibiliError, setBilibiliError] = useState("")
+  const [bilibiliSuccess, setBilibiliSuccess] = useState<number | null>(null)
   const [rerunOpen, setRerunOpen] = useState(false)
   const [rerunning, setRerunning] = useState(false)
   const [rerunError, setRerunError] = useState("")
@@ -137,6 +150,26 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : t.task.deleteError)
       setDeleting(false)
+    }
+  }
+
+  const handleCreateBilibiliDraft = async () => {
+    setBilibiliCreating(true)
+    setBilibiliError("")
+    setBilibiliSuccess(null)
+    try {
+      const result = await createBilibiliDraft(id, {
+        title: bilibiliTitle.trim(),
+        tid: Number(bilibiliTid) || 171,
+        tag: bilibiliTag.trim(),
+        description: bilibiliDescription.trim(),
+      })
+      setBilibiliSuccess(result.draft_id)
+      setBilibiliOpen(false)
+    } catch (err) {
+      setBilibiliError(err instanceof Error ? err.message : t.task.bilibiliDraftError)
+    } finally {
+      setBilibiliCreating(false)
     }
   }
 
@@ -342,13 +375,108 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
                 className="w-full rounded-md border border-emerald-200 bg-black"
               />
               <p className="break-all text-xs text-muted-foreground">{task.final_video_path}</p>
-              <Button nativeButton={false} render={<a href={finalVideoDownloadUrl(task.id)} />}>
-                <Download className="size-4" />
-                {t.task.download}
-              </Button>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button nativeButton={false} render={<a href={finalVideoDownloadUrl(task.id)} />}>
+                  <Download className="size-4" />
+                  {t.task.download}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setBilibiliTitle(task.translated_title || task.title || "")
+                    setBilibiliDescription(task.translated_description || "")
+                    setBilibiliTag("")
+                    setBilibiliTid("171")
+                    setBilibiliError("")
+                    setBilibiliSuccess(null)
+                    setBilibiliOpen(true)
+                  }}
+                >
+                  <Upload className="size-4" />
+                  {t.task.bilibiliDraft}
+                </Button>
+              </div>
             </CardContent>
           </Card>
         ) : null}
+
+        <Dialog open={bilibiliOpen} onOpenChange={setBilibiliOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{t.task.bilibiliDraftTitle}</DialogTitle>
+              <DialogDescription>{t.task.bilibiliDraftDescription}</DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-2">
+              <div className="grid gap-2">
+                <Label htmlFor="bilibiliTitle">{t.task.bilibiliDraftFieldTitle}</Label>
+                <Input
+                  id="bilibiliTitle"
+                  value={bilibiliTitle}
+                  onChange={(event) => setBilibiliTitle(event.target.value)}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="bilibiliTid">{t.task.bilibiliDraftFieldTid}</Label>
+                <Input
+                  id="bilibiliTid"
+                  inputMode="numeric"
+                  value={bilibiliTid}
+                  onChange={(event) =>
+                    setBilibiliTid(event.target.value.replace(/[^0-9]/g, ""))
+                  }
+                />
+                <p className="text-xs text-muted-foreground">
+                  {t.task.bilibiliDraftFieldTidHelper}
+                </p>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="bilibiliTag">{t.task.bilibiliDraftFieldTag}</Label>
+                <Input
+                  id="bilibiliTag"
+                  value={bilibiliTag}
+                  onChange={(event) => setBilibiliTag(event.target.value)}
+                  placeholder={t.task.bilibiliDraftFieldTagPlaceholder}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="bilibiliDescription">
+                  {t.task.bilibiliDraftFieldDescription}
+                </Label>
+                <Textarea
+                  id="bilibiliDescription"
+                  value={bilibiliDescription}
+                  onChange={(event) => setBilibiliDescription(event.target.value)}
+                  className="min-h-24"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">{t.task.bilibiliDraftHelper}</p>
+              {bilibiliError ? (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  {bilibiliError}
+                </div>
+              ) : null}
+              {bilibiliSuccess !== null ? (
+                <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+                  <CheckCircle2 className="size-4 shrink-0" />
+                  {t.task.bilibiliDraftSuccess.replace("{draftId}", String(bilibiliSuccess))}
+                </div>
+              ) : null}
+            </div>
+            <DialogFooter>
+              <DialogClose render={<Button variant="outline" disabled={bilibiliCreating} />}>
+                {t.common.cancel}
+              </DialogClose>
+              <Button onClick={handleCreateBilibiliDraft} disabled={bilibiliCreating}>
+                {bilibiliCreating ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Upload className="size-4" />
+                )}
+                {bilibiliCreating ? t.task.bilibiliDraftCreating : t.task.bilibiliDraftCreate}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         <Card>
           <CardHeader>

@@ -24,6 +24,7 @@ def configure_tmp_runtime(monkeypatch, tmp_path):
     log_dir.mkdir()
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "test.sqlite")
     monkeypatch.setattr(main, "YOUTUBE_COOKIE_PATH", tmp_path / "cookies" / "youtube.txt")
+    monkeypatch.setattr(main, "BILIBILI_COOKIE_PATH", tmp_path / "cookies" / "bilibili.txt")
     monkeypatch.setattr(main, "WORKFOLDER", workfolder)
     monkeypatch.setattr(config, "WORKFOLDER", workfolder)
     monkeypatch.setattr(config, "LOG_DIR", log_dir)

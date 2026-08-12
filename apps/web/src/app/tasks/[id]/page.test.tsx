@@ -217,4 +217,72 @@ describe("任务详情轮询", () => {
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100")
     expect(screen.queryByRole("button", { name: "重做" })).not.toBeInTheDocument()
   })
+
+  it("成功任务可打开 B 站草稿对话框并提交上传请求", async () => {
+    const doneTask: Task = {
+      ...taskWithStatus("succeeded"),
+      final_video_path: "D:\\workfolder\\task-race\\final.mp4",
+      stages: [{
+        task_id: "task-race",
+        name: "done",
+        label: "Done",
+        status: "succeeded",
+        progress: 100,
+        started_at: null,
+        completed_at: null,
+        last_message: null,
+        error_message: null,
+      }],
+    }
+
+    mocks.fetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      const method = init?.method || "GET"
+      if (method === "GET" && path === "/api/tasks/task-race") {
+        return jsonResponse(doneTask)
+      }
+      if (method === "GET" && path === "/api/tasks/task-race/log") {
+        return new Response("done", { status: 200 })
+      }
+      if (method === "POST" && path === "/api/tasks/task-race/bilibili/draft") {
+        return jsonResponse({ draft_id: 123456, aid: 0, title: "Task with a polling race", cover: "" })
+      }
+      throw new Error(`未预期的请求: ${method} ${path}`)
+    })
+    vi.stubGlobal("fetch", mocks.fetch)
+
+    const user = userEvent.setup()
+    const params = Promise.resolve({ id: "task-race" })
+    await act(async () => {
+      render(
+        <LanguageProvider>
+          <Suspense fallback={<div>loading</div>}>
+            <TaskDetailPage params={params} />
+          </Suspense>
+        </LanguageProvider>,
+      )
+      await params
+    })
+
+    const openButton = await screen.findByRole("button", { name: "上传 B 站草稿" })
+    await user.click(openButton)
+
+    const titleInput = await screen.findByLabelText("标题")
+    expect(titleInput).toHaveValue("Task with a polling race")
+    expect(screen.getByLabelText("简介")).toHaveValue("First paragraph.\n\nSecond paragraph.")
+    await user.click(screen.getByRole("button", { name: "上传草稿" }))
+
+    await waitFor(() => {
+      const postCall = mocks.fetch.mock.calls.find(
+        ([input, init]) =>
+          String(input) === "/api/tasks/task-race/bilibili/draft" &&
+          (init?.method || "GET") === "POST",
+      )
+      expect(postCall).toBeTruthy()
+      const body = JSON.parse(String(postCall?.[1]?.body))
+      expect(body.title).toBe("Task with a polling race")
+      expect(body.tid).toBe(171)
+      expect(body.description).toBe("First paragraph.\n\nSecond paragraph.")
+    })
+  })
 })

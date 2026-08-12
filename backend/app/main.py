@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import quote
 
+import requests
+
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
@@ -18,12 +20,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, SecretStr
 
-from . import auth, database, runtime_security, worker
+from . import auth, bilibili, database, runtime_security, worker
 from .adapters.local_subtitles import parse_srt, uploaded_subtitle_dir
 from .adapters.local_video import remove_upload, uploaded_video_dir
 from .adapters.openai_client import validate_openai_base_url
 from .adapters.openai_translate import list_models as list_openai_models
-from .config import WORKFOLDER, YOUTUBE_COOKIE_PATH, ensure_runtime_dirs
+from .config import BILIBILI_COOKIE_PATH, WORKFOLDER, YOUTUBE_COOKIE_PATH, ensure_runtime_dirs
 from .pipeline import run_task
 from .runtime_checks import validate_runtime_device
 from .sanitize import sanitize_text
@@ -85,6 +87,17 @@ class ContinueTaskRequest(BaseModel):
 
 class YouTubeCookieUpdate(BaseModel):
     content: str
+
+
+class BilibiliCookieUpdate(BaseModel):
+    content: str
+
+
+class BilibiliDraftRequest(BaseModel):
+    title: str = ""
+    tid: int = 171
+    tag: str = ""
+    description: str = ""
 
 
 class OpenAISettingsUpdate(BaseModel):
@@ -764,6 +777,73 @@ def task_thumbnail(task_id: str) -> FileResponse:
     return FileResponse(path)
 
 
+def _bilibili_upload_cover(session: requests.Session, csrf: str, task: dict) -> str:
+    thumbnail_path = task.get("thumbnail_path")
+    session_path = task.get("session_path")
+    if not thumbnail_path or not session_path:
+        return ""
+    path = Path(thumbnail_path).resolve()
+    media_dir = (Path(session_path) / "media").resolve()
+    try:
+        path.relative_to(media_dir)
+    except ValueError:
+        return ""
+    if not path.is_file():
+        return ""
+    return bilibili.upload_cover(session, csrf, path)
+
+
+@app.post("/api/tasks/{task_id}/bilibili/draft")
+def create_bilibili_draft(task_id: str, payload: BilibiliDraftRequest) -> dict:
+    task = database.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    if task.get("status") != "succeeded":
+        raise HTTPException(status_code=409, detail="Only succeeded tasks can be uploaded to Bilibili.")
+    final_path = task.get("final_video_path")
+    if not final_path or not Path(final_path).is_file():
+        raise HTTPException(status_code=409, detail="Final video is not available.")
+    title = (
+        payload.title.strip()
+        or (task.get("translated_title") or task.get("title") or "").strip()
+    ).strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="Bilibili draft title is required.")
+    description = (payload.description or task.get("translated_description") or "").strip()
+    try:
+        sessdata, csrf = bilibili.read_bilibili_credentials(BILIBILI_COOKIE_PATH)
+        session = bilibili.build_session(sessdata)
+        video_path = Path(final_path)
+        pre = bilibili.prepare_upload(session, video_path.name, video_path.stat().st_size)
+        filename, cid = bilibili.upload_video(
+            session,
+            video_path,
+            pre["auth"],
+            pre["endpoint"],
+            pre["upos_uri"],
+            pre["chunk_size"],
+            pre["biz_id"],
+        )
+        cover = _bilibili_upload_cover(session, csrf, task)
+        draft_payload = bilibili.build_draft_payload(
+            csrf=csrf,
+            title=title,
+            tid=payload.tid,
+            tag=payload.tag,
+            description=description,
+            filename=filename,
+            cid=cid,
+            cover=cover,
+            source=task.get("url") or "",
+        )
+        draft_id = bilibili.create_draft(session, draft_payload)
+    except bilibili.BilibiliError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Bilibili request failed: {exc}") from exc
+    return {"draft_id": draft_id, "aid": 0, "title": title, "cover": cover}
+
+
 @app.get("/api/cookies/youtube")
 def get_youtube_cookie() -> dict:
     metadata = runtime_security.private_file_stat(YOUTUBE_COOKIE_PATH)
@@ -781,6 +861,25 @@ def save_youtube_cookie(payload: YouTubeCookieUpdate) -> dict:
     else:
         runtime_security.remove_private_file(YOUTUBE_COOKIE_PATH, missing_ok=True)
     return get_youtube_cookie()
+
+
+@app.get("/api/cookies/bilibili")
+def get_bilibili_cookie() -> dict:
+    metadata = runtime_security.private_file_stat(BILIBILI_COOKIE_PATH)
+    exists = metadata is not None
+    size = metadata.st_size if metadata else 0
+    updated_at = metadata.st_mtime if metadata else None
+    return {"exists": exists, "size": size, "updated_at": updated_at, "content": ""}
+
+
+@app.post("/api/cookies/bilibili")
+def save_bilibili_cookie(payload: BilibiliCookieUpdate) -> dict:
+    content = payload.content.strip()
+    if content:
+        runtime_security.atomic_write_private_text(BILIBILI_COOKIE_PATH, content + "\n")
+    else:
+        runtime_security.remove_private_file(BILIBILI_COOKIE_PATH, missing_ok=True)
+    return get_bilibili_cookie()
 
 
 @app.get("/api/settings/openai")
