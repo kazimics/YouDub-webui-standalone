@@ -13,6 +13,7 @@ from backend.app import auth, config, database, pipeline
 from backend.app import main
 from backend.app import worker
 from backend.app.adapters import local_subtitles
+from backend.app.subtitle_style import SubtitleStyle
 from backend.tests.conftest import TEST_AUTH_PASSWORD
 
 
@@ -180,7 +181,41 @@ def test_same_video_with_different_dubbing_setting_returns_conflict(monkeypatch,
     assert duplicate.status_code == 201
     assert duplicate.json()["id"] == first.json()["id"]
     assert conflicting.status_code == 409
-    assert "different dubbing setting" in conflicting.json()["detail"]
+    assert "different output settings" in conflicting.json()["detail"]
+    assert enqueued == ["abcdefghijk"]
+
+
+def test_task_creation_validates_and_dedupes_subtitle_style(monkeypatch, tmp_path):
+    configure_tmp_runtime(monkeypatch, tmp_path)
+    enqueued: list[str] = []
+    monkeypatch.setattr(main.worker, "enqueue", lambda task_id: enqueued.append(task_id))
+    client = authenticated_client()
+    url = "https://www.youtube.com/watch?v=abcdefghijk"
+    style = {
+        "subtitle_zh_font": "Microsoft YaHei",
+        "subtitle_en_font": "Times New Roman",
+        "subtitle_zh_font_size": 22,
+        "subtitle_en_font_size": 11,
+    }
+
+    first = client.post("/api/tasks", json={"url": url, **style})
+    duplicate = client.post("/api/tasks", json={"url": url, **style})
+    conflict = client.post(
+        "/api/tasks",
+        json={"url": url, **style, "subtitle_en_font_size": 12},
+    )
+    invalid = client.post(
+        "/api/tasks",
+        json={"url": "https://youtu.be/zyxwvutsrqp", **style, "subtitle_en_font_size": 50},
+    )
+
+    assert first.status_code == 201
+    assert duplicate.status_code == 201
+    assert duplicate.json()["id"] == first.json()["id"]
+    assert {key: first.json()[key] for key in style} == style
+    assert conflict.status_code == 409
+    assert invalid.status_code == 422
+    assert "between 8 and 36" in invalid.json()["detail"]
     assert enqueued == ["abcdefghijk"]
 
 
@@ -221,11 +256,19 @@ def test_init_db_migrates_existing_tasks_to_current_schema(monkeypatch, tmp_path
     assert "translated_title" in columns
     assert "translated_description" in columns
     assert "thumbnail_path" in columns
+    assert "subtitle_zh_font" in columns
+    assert "subtitle_en_font" in columns
+    assert "subtitle_zh_font_size" in columns
+    assert "subtitle_en_font_size" in columns
     task = database.get_task("legacy")
     assert task["dubbing_enabled"] is True
     assert task["translated_title"] is None
     assert task["translated_description"] is None
     assert task["thumbnail_path"] is None
+    assert task["subtitle_zh_font"] == "Noto Sans CJK SC"
+    assert task["subtitle_en_font"] == "Arial"
+    assert task["subtitle_zh_font_size"] == 18
+    assert task["subtitle_en_font_size"] == 14
 
 
 def test_different_videos_create_separate_tasks(monkeypatch, tmp_path):
@@ -538,6 +581,54 @@ def test_delete_task_removes_session_log_and_record(monkeypatch, tmp_path):
     assert not log_file.exists()
 
 
+def test_delete_task_removes_record_when_session_file_is_locked(monkeypatch, tmp_path):
+    configure_tmp_runtime(monkeypatch, tmp_path)
+    task_id = database.create_task(
+        "https://www.youtube.com/watch?v=lockedvidxx",
+        task_id="lockedvidxx",
+    )
+    session = config.WORKFOLDER / "uploader" / "title__lockedvidxx"
+    (session / "media").mkdir(parents=True)
+    locked_file = session / "media" / "video_final.mp4"
+    locked_file.write_bytes(b"mp4")
+    database.update_task(task_id, session_path=str(session), status="succeeded")
+    monkeypatch.setattr(main.time, "sleep", lambda _delay: None)
+
+    def fail_remove_tree(_path):
+        raise PermissionError("file is in use")
+
+    monkeypatch.setattr(main, "_remove_tree", fail_remove_tree)
+
+    client = authenticated_client()
+    response = client.delete(f"/api/tasks/{task_id}")
+
+    assert response.status_code == 204
+    assert database.get_task(task_id) is None
+    assert session.exists()
+
+
+def test_rerun_task_keeps_record_when_session_cleanup_fails(monkeypatch, tmp_path):
+    configure_tmp_runtime(monkeypatch, tmp_path)
+    task_id = database.create_task(
+        "https://www.youtube.com/watch?v=rerunlocked",
+        task_id="rerunlocked",
+    )
+    session = config.WORKFOLDER / "uploader" / "title__rerunlocked"
+    session.mkdir(parents=True)
+    database.update_task(task_id, session_path=str(session), status="failed")
+    monkeypatch.setattr(
+        main,
+        "_remove_tree",
+        lambda _path: (_ for _ in ()).throw(PermissionError("file is in use")),
+    )
+
+    client = authenticated_client()
+    with pytest.raises(PermissionError, match="file is in use"):
+        client.post(f"/api/tasks/{task_id}/rerun")
+
+    assert database.get_task(task_id) is not None
+
+
 def test_delete_task_returns_404_for_unknown(monkeypatch, tmp_path):
     configure_tmp_runtime(monkeypatch, tmp_path)
     client = authenticated_client()
@@ -568,6 +659,7 @@ def test_rerun_task_purges_session_and_requeues(monkeypatch, tmp_path):
         "https://www.youtube.com/watch?v=rerunvideox",
         task_id="rerunvideox",
         dubbing_enabled=False,
+        subtitle_style=SubtitleStyle("Microsoft YaHei", "Calibri", 20, 10),
     )
     session = config.WORKFOLDER / "uploader" / "title__rerunvideox"
     (session / "media").mkdir(parents=True)
@@ -585,6 +677,10 @@ def test_rerun_task_purges_session_and_requeues(monkeypatch, tmp_path):
     assert body["status"] == "queued"
     assert body["session_path"] is None
     assert body["dubbing_enabled"] is False
+    assert body["subtitle_zh_font"] == "Microsoft YaHei"
+    assert body["subtitle_en_font"] == "Calibri"
+    assert body["subtitle_zh_font_size"] == 20
+    assert body["subtitle_en_font_size"] == 10
     assert enqueued == [task_id]
     assert not session.exists()
     assert not log_file.exists()
@@ -1426,12 +1522,23 @@ def test_upload_local_video_accepts_disabled_dubbing(monkeypatch, tmp_path):
 
     response = client.post(
         "/api/tasks/upload",
-        data={"direction": "en-zh", "dubbing_enabled": "false"},
+        data={
+            "direction": "en-zh",
+            "dubbing_enabled": "false",
+            "subtitle_zh_font": "SimHei",
+            "subtitle_en_font": "Segoe UI",
+            "subtitle_zh_font_size": "19",
+            "subtitle_en_font_size": "10",
+        },
         files={"file": ("clip.mp4", b"mp4data", "video/mp4")},
     )
 
     assert response.status_code == 201
     assert response.json()["dubbing_enabled"] is False
+    assert response.json()["subtitle_zh_font"] == "SimHei"
+    assert response.json()["subtitle_en_font"] == "Segoe UI"
+    assert response.json()["subtitle_zh_font_size"] == 19
+    assert response.json()["subtitle_en_font_size"] == 10
     assert database.get_task(response.json()["id"])["dubbing_enabled"] is False
 
 

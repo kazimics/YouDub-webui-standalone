@@ -9,6 +9,7 @@ from typing import Any
 from . import config, runtime_security
 from .config import DB_PATH, ensure_runtime_dirs, openai_defaults, ytdlp_defaults
 from .stages import STAGES
+from .subtitle_style import DEFAULT_SUBTITLE_STYLE, SubtitleStyle
 
 
 ACTIVE_STATUSES = ("queued", "running")
@@ -47,6 +48,10 @@ def init_db() -> None:
               translated_title TEXT,
               translated_description TEXT,
               thumbnail_path TEXT,
+              subtitle_zh_font TEXT NOT NULL DEFAULT 'Noto Sans CJK SC',
+              subtitle_en_font TEXT NOT NULL DEFAULT 'Arial',
+              subtitle_zh_font_size INTEGER NOT NULL DEFAULT 18,
+              subtitle_en_font_size INTEGER NOT NULL DEFAULT 14,
               status TEXT NOT NULL,
               current_stage TEXT,
               session_path TEXT,
@@ -116,6 +121,22 @@ def init_db() -> None:
             conn.execute("ALTER TABLE tasks ADD COLUMN translated_description TEXT")
         if "thumbnail_path" not in task_columns:
             conn.execute("ALTER TABLE tasks ADD COLUMN thumbnail_path TEXT")
+        if "subtitle_zh_font" not in task_columns:
+            conn.execute(
+                "ALTER TABLE tasks ADD COLUMN subtitle_zh_font TEXT NOT NULL DEFAULT 'Noto Sans CJK SC'"
+            )
+        if "subtitle_en_font" not in task_columns:
+            conn.execute(
+                "ALTER TABLE tasks ADD COLUMN subtitle_en_font TEXT NOT NULL DEFAULT 'Arial'"
+            )
+        if "subtitle_zh_font_size" not in task_columns:
+            conn.execute(
+                "ALTER TABLE tasks ADD COLUMN subtitle_zh_font_size INTEGER NOT NULL DEFAULT 18"
+            )
+        if "subtitle_en_font_size" not in task_columns:
+            conn.execute(
+                "ALTER TABLE tasks ADD COLUMN subtitle_en_font_size INTEGER NOT NULL DEFAULT 14"
+            )
         if "execution_mode" not in task_columns:
             conn.execute(
                 "ALTER TABLE tasks ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'auto'"
@@ -289,6 +310,7 @@ def create_task(
     *,
     execution_mode: str = DEFAULT_EXECUTION_MODE,
     dubbing_enabled: bool = True,
+    subtitle_style: SubtitleStyle = DEFAULT_SUBTITLE_STYLE,
 ) -> str:
     new_id = task_id or str(uuid.uuid4())
     created_at = now_iso()
@@ -297,11 +319,24 @@ def create_task(
         conn.execute(
             """
             INSERT INTO tasks (
-              id, url, status, current_stage, created_at, execution_mode, dubbing_enabled
+              id, url, status, current_stage, created_at, execution_mode, dubbing_enabled,
+              subtitle_zh_font, subtitle_en_font,
+              subtitle_zh_font_size, subtitle_en_font_size
             )
-            VALUES (?, ?, 'queued', ?, ?, ?, ?)
+            VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (new_id, url, STAGES[0].name, created_at, mode, int(dubbing_enabled)),
+            (
+                new_id,
+                url,
+                STAGES[0].name,
+                created_at,
+                mode,
+                int(dubbing_enabled),
+                subtitle_style.chinese_font,
+                subtitle_style.english_font,
+                subtitle_style.chinese_font_size,
+                subtitle_style.english_font_size,
+            ),
         )
         conn.executemany(
             """
@@ -317,12 +352,26 @@ def find_task_by_video_id(
     video_id: str,
     *,
     dubbing_enabled: bool | None = None,
+    subtitle_style: SubtitleStyle | None = None,
 ) -> str | None:
     where = "(id = ? OR url LIKE ?)"
     params: list[Any] = [video_id, f"%{video_id}%"]
     if dubbing_enabled is not None:
         where += " AND dubbing_enabled = ?"
         params.append(int(dubbing_enabled))
+    if subtitle_style is not None:
+        where += (
+            " AND subtitle_zh_font = ? AND subtitle_en_font = ?"
+            " AND subtitle_zh_font_size = ? AND subtitle_en_font_size = ?"
+        )
+        params.extend(
+            [
+                subtitle_style.chinese_font,
+                subtitle_style.english_font,
+                subtitle_style.chinese_font_size,
+                subtitle_style.english_font_size,
+            ]
+        )
     with connect() as conn:
         row = conn.execute(
             f"SELECT id FROM tasks WHERE {where} "

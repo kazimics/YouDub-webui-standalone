@@ -309,6 +309,10 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
                 </dd>
                 <dt className="text-muted-foreground">{t.task.finalAudioMode}</dt>
                 <dd>{task.dubbing_enabled !== false ? t.task.dubbedAudio : t.task.originalAudio}</dd>
+                <dt className="text-muted-foreground">{t.task.subtitleChineseStyle}</dt>
+                <dd>{task.subtitle_zh_font} · {task.subtitle_zh_font_size}px</dd>
+                <dt className="text-muted-foreground">{t.task.subtitleEnglishStyle}</dt>
+                <dd>{task.subtitle_en_font} · {task.subtitle_en_font_size}px</dd>
                 {task.session_path ? (
                   <>
                     <dt className="text-muted-foreground">{t.task.session}</dt>

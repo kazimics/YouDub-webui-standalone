@@ -515,16 +515,17 @@ def test_merge_video_without_dubbing_uses_translation_and_original_audio_path(
     video.write_bytes(b"source")
     translation.write_text('{"translation": []}', encoding="utf-8")
     final_path = media / "video_final.mp4"
-    captured: dict[str, Path] = {}
+    captured = {}
 
     def fail_dubbed_merge(*args, **kwargs):
         raise AssertionError("dubbed merge path must not run")
 
-    def original_merge(video_file, translation_file, session_dir):
+    def original_merge(video_file, translation_file, session_dir, subtitle_style):
         captured.update(
             video_file=video_file,
             translation_file=translation_file,
             session=session_dir,
+            subtitle_style=subtitle_style,
         )
         final_path.write_bytes(b"final")
         return final_path
@@ -538,11 +539,11 @@ def test_merge_video_without_dubbing_uses_translation_and_original_audio_path(
 
     runner._merge_video(task)
 
-    assert captured == {
-        "video_file": video,
-        "translation_file": translation,
-        "session": session,
-    }
+    assert captured["video_file"] == video
+    assert captured["translation_file"] == translation
+    assert captured["session"] == session
+    assert captured["subtitle_style"].chinese_font == "Noto Sans CJK SC"
+    assert captured["subtitle_style"].english_font_size == 14
     assert runner.artifacts.final_video == final_path
 
 

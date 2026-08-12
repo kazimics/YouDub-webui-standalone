@@ -93,6 +93,10 @@ describe("本地视频字幕选择", () => {
     expect((form.get("file") as File).name).toBe("video-b.mp4")
     expect(form.has("subtitle_file")).toBe(false)
     expect(form.get("dubbing_enabled")).toBe("false")
+    expect(form.get("subtitle_zh_font")).toBe("Noto Sans CJK SC")
+    expect(form.get("subtitle_en_font")).toBe("Arial")
+    expect(form.get("subtitle_zh_font_size")).toBe("18")
+    expect(form.get("subtitle_en_font_size")).toBe("14")
     expect(mocks.push).toHaveBeenCalledWith("/tasks/task-b")
   })
 })
@@ -151,6 +155,78 @@ describe("配音开关", () => {
     expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
       execution_mode: "auto",
       dubbing_enabled: false,
+    })
+  })
+})
+
+describe("字幕样式", () => {
+  it("实时预览并随 URL 任务提交中英文字体和字号", async () => {
+    mocks.fetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path === "/api/tasks" && init?.method === "POST") {
+        return new Response(JSON.stringify({ id: "styled-task" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      }
+      if (path.startsWith("/api/tasks")) {
+        return new Response(JSON.stringify({
+          tasks: [],
+          total: 0,
+          active_count: 0,
+          page: 1,
+          page_size: 20,
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      }
+      throw new Error(`未预期的请求: ${path}`)
+    })
+    vi.stubGlobal("fetch", mocks.fetch)
+
+    const user = userEvent.setup()
+    render(
+      <LanguageProvider>
+        <Home />
+      </LanguageProvider>,
+    )
+
+    expect(screen.getByTestId("subtitle-preview-zh")).toHaveStyle({
+      fontFamily: "Noto Sans CJK SC",
+      fontSize: "4.6875cqw",
+    })
+    expect(screen.getByTestId("subtitle-preview-en")).toHaveStyle({
+      fontFamily: "Arial",
+      fontSize: "3.6458cqw",
+    })
+
+    await user.click(screen.getByLabelText("英文字体"))
+    await user.click(await screen.findByRole("option", { name: "Times New Roman" }))
+    fireEvent.change(screen.getByLabelText("中文字幕大小"), { target: { value: "22" } })
+    fireEvent.change(screen.getByLabelText("英文字幕大小"), { target: { value: "10" } })
+
+    expect(screen.getByTestId("subtitle-preview-zh")).toHaveStyle({ fontSize: "5.7292cqw" })
+    expect(screen.getByTestId("subtitle-preview-en")).toHaveStyle({
+      fontFamily: "Times New Roman",
+      fontSize: "2.6042cqw",
+    })
+
+    await user.type(
+      screen.getByLabelText(/YouTube 链接/),
+      "https://www.youtube.com/watch?v=testvideo01",
+    )
+    await user.click(screen.getByRole("button", { name: "创建任务" }))
+
+    await waitFor(() => expect(mocks.push).toHaveBeenCalledWith("/tasks/styled-task"))
+    const createCall = mocks.fetch.mock.calls.find(
+      ([input, init]) => String(input) === "/api/tasks" && init?.method === "POST",
+    )
+    expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
+      subtitle_zh_font: "Noto Sans CJK SC",
+      subtitle_en_font: "Times New Roman",
+      subtitle_zh_font_size: 22,
+      subtitle_en_font_size: 10,
     })
   })
 })

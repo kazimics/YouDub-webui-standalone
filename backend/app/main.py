@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import stat
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -26,6 +28,13 @@ from .pipeline import run_task
 from .runtime_checks import validate_runtime_device
 from .sanitize import sanitize_text
 from .sources import detect_source
+from .subtitle_style import (
+    DEFAULT_CHINESE_FONT,
+    DEFAULT_CHINESE_FONT_SIZE,
+    DEFAULT_ENGLISH_FONT,
+    DEFAULT_ENGLISH_FONT_SIZE,
+    normalize_subtitle_style,
+)
 from .stage_reset import remove_stage_artifacts
 from .stages import STAGE_NAMES
 from .youtube import LOCAL_UPLOAD_DIRECTIONS, is_local_upload_url, validate_video_url
@@ -64,6 +73,10 @@ class TaskCreate(BaseModel):
     url: str
     execution_mode: str = "auto"
     dubbing_enabled: bool = True
+    subtitle_zh_font: str = DEFAULT_CHINESE_FONT
+    subtitle_en_font: str = DEFAULT_ENGLISH_FONT
+    subtitle_zh_font_size: int = DEFAULT_CHINESE_FONT_SIZE
+    subtitle_en_font_size: int = DEFAULT_ENGLISH_FONT_SIZE
 
 
 class ContinueTaskRequest(BaseModel):
@@ -329,9 +342,20 @@ def create_task(payload: TaskCreate) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    try:
+        subtitle_style = normalize_subtitle_style(
+            payload.subtitle_zh_font,
+            payload.subtitle_en_font,
+            payload.subtitle_zh_font_size,
+            payload.subtitle_en_font_size,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     matching_id = database.find_task_by_video_id(
         validated_url.video_id,
         dubbing_enabled=payload.dubbing_enabled,
+        subtitle_style=subtitle_style,
     )
     if matching_id:
         return database.get_task(matching_id)
@@ -341,8 +365,8 @@ def create_task(payload: TaskCreate) -> dict:
         raise HTTPException(
             status_code=409,
             detail=(
-                "A task for this video already exists with a different dubbing setting. "
-                "Delete the existing task before creating it with the new setting."
+                "A task for this video already exists with different output settings. "
+                "Delete the existing task before creating it with the new settings."
             ),
         )
 
@@ -352,6 +376,7 @@ def create_task(payload: TaskCreate) -> dict:
         task_id=validated_url.video_id,
         execution_mode=normalize_execution_mode(payload.execution_mode),
         dubbing_enabled=payload.dubbing_enabled,
+        subtitle_style=subtitle_style,
     )
     worker.enqueue(task_id)
     return database.get_task(task_id)
@@ -430,6 +455,10 @@ def upload_local_video(
     subtitle_file: UploadFile | None = File(None),
     execution_mode: str = Form("auto"),
     dubbing_enabled: bool = Form(True),
+    subtitle_zh_font: str = Form(DEFAULT_CHINESE_FONT),
+    subtitle_en_font: str = Form(DEFAULT_ENGLISH_FONT),
+    subtitle_zh_font_size: int = Form(DEFAULT_CHINESE_FONT_SIZE),
+    subtitle_en_font_size: int = Form(DEFAULT_ENGLISH_FONT_SIZE),
 ) -> dict:
     if direction not in LOCAL_UPLOAD_DIRECTIONS:
         raise HTTPException(status_code=422, detail="Unsupported local video direction.")
@@ -440,6 +469,15 @@ def upload_local_video(
     if subtitle_file is not None:
         stored_subtitle_name = _clean_subtitle_filename(subtitle_file.filename)
     normalized_execution_mode = normalize_execution_mode(execution_mode)
+    try:
+        subtitle_style = normalize_subtitle_style(
+            subtitle_zh_font,
+            subtitle_en_font,
+            subtitle_zh_font_size,
+            subtitle_en_font_size,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     _ensure_runtime_ready()
 
     task_id = str(uuid.uuid4())
@@ -466,6 +504,7 @@ def upload_local_video(
             task_id=task_id,
             execution_mode=normalized_execution_mode,
             dubbing_enabled=dubbing_enabled,
+            subtitle_style=subtitle_style,
         )
         database.update_task(task_id, title=Path(original_name).stem)
         task = database.get_task(task_id)
@@ -519,15 +558,63 @@ def _is_inside_workfolder(path: Path) -> bool:
     return True
 
 
-def _purge_task(task: dict) -> None:
+def _make_writable_and_retry(function, path: str, _exc_info) -> None:
+    os.chmod(path, stat.S_IWRITE)
+    function(path)
+
+
+def _remove_tree(path: Path) -> None:
+    last_error: OSError | None = None
+    for delay in (0.0, 0.1, 0.3):
+        if delay:
+            time.sleep(delay)
+        try:
+            shutil.rmtree(path, onerror=_make_writable_and_retry)
+            return
+        except OSError as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+
+
+def _remove_file(path: Path) -> None:
+    last_error: OSError | None = None
+    for delay in (0.0, 0.1, 0.3):
+        if delay:
+            time.sleep(delay)
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except PermissionError as exc:
+            last_error = exc
+            try:
+                path.chmod(stat.S_IWRITE)
+            except OSError:
+                pass
+    if last_error is not None:
+        raise last_error
+
+
+def _purge_task(task: dict, *, tolerate_file_errors: bool = False) -> None:
+    cleanup_errors: list[tuple[str, OSError]] = []
     session_path = task.get("session_path")
     if session_path:
         session_dir = Path(session_path)
         if session_dir.exists() and _is_inside_workfolder(session_dir):
-            shutil.rmtree(session_dir)
+            try:
+                _remove_tree(session_dir)
+            except OSError as exc:
+                cleanup_errors.append((str(session_dir), exc))
     log_file = database.log_path(task["id"])
     if log_file.exists():
-        log_file.unlink()
+        try:
+            _remove_file(log_file)
+        except OSError as exc:
+            cleanup_errors.append((str(log_file), exc))
+    if cleanup_errors and not tolerate_file_errors:
+        raise cleanup_errors[0][1]
+    for path, exc in cleanup_errors:
+        logger.warning("Could not remove task artifact %s: %s", path, exc)
     database.delete_task(task["id"])
 
 
@@ -538,9 +625,12 @@ def delete_task(task_id: str) -> Response:
         raise HTTPException(status_code=404, detail="Task not found.")
     if task["status"] == "running":
         raise HTTPException(status_code=409, detail="Cannot delete a running task.")
-    _purge_task(task)
+    _purge_task(task, tolerate_file_errors=True)
     if is_local_upload_url(task["url"]):
-        remove_upload(WORKFOLDER, task["id"])
+        try:
+            remove_upload(WORKFOLDER, task["id"])
+        except OSError as exc:
+            logger.warning("Could not remove local upload for task %s: %s", task["id"], exc)
     return Response(status_code=204)
 
 
@@ -556,12 +646,19 @@ def rerun_task(task_id: str) -> dict:
     url = task["url"]
     execution_mode = task.get("execution_mode") or database.DEFAULT_EXECUTION_MODE
     dubbing_enabled = bool(task.get("dubbing_enabled", True))
+    subtitle_style = normalize_subtitle_style(
+        task["subtitle_zh_font"],
+        task["subtitle_en_font"],
+        task["subtitle_zh_font_size"],
+        task["subtitle_en_font_size"],
+    )
     _purge_task(task)
     new_id = database.create_task(
         url,
         task_id=task_id,
         execution_mode=execution_mode,
         dubbing_enabled=dubbing_enabled,
+        subtitle_style=subtitle_style,
     )
     worker.enqueue(new_id)
     return database.get_task(new_id)

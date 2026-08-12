@@ -24,6 +24,7 @@ def _translation_globs(session: Path, target_language: str) -> list[Path]:
     metadata = session / "metadata"
     paths = list(metadata.glob(f"translation.{target_language}.json"))
     paths.extend(metadata.glob("subtitles.*.srt"))
+    paths.extend(metadata.glob("subtitles.*.ass"))
     return paths
 
 

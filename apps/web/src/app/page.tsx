@@ -1,13 +1,20 @@
 "use client"
 
 import Link from "next/link"
+import Image from "next/image"
 import { useRouter } from "next/navigation"
 import { ChangeEvent, FormEvent, useCallback, useRef, useState } from "react"
 import { ChevronLeft, ChevronRight, Play, Search, Upload } from "lucide-react"
 
 import {
+  CHINESE_SUBTITLE_FONTS,
+  DEFAULT_SUBTITLE_STYLE,
+  ENGLISH_SUBTITLE_FONTS,
   ExecutionMode,
   LocalDirection,
+  MAX_SUBTITLE_FONT_SIZE,
+  MIN_SUBTITLE_FONT_SIZE,
+  SubtitleStyleInput,
   TaskListExecutionMode,
   TaskListResponse,
   TaskListSort,
@@ -95,6 +102,7 @@ export default function Home() {
   const [localDirection, setLocalDirection] = useState<LocalDirection>("en-zh")
   const [executionMode, setExecutionMode] = useState<ExecutionMode>("auto")
   const [dubbingEnabled, setDubbingEnabled] = useState(true)
+  const [subtitleStyle, setSubtitleStyle] = useState<SubtitleStyleInput>(DEFAULT_SUBTITLE_STYLE)
   const [tasks, setTasks] = useState<TaskSummary[]>([])
   const [taskTotal, setTaskTotal] = useState(0)
   const [activeTaskCount, setActiveTaskCount] = useState<number | null>(null)
@@ -226,8 +234,9 @@ export default function Home() {
             localSubtitleFile,
             executionMode,
             dubbingEnabled,
+            subtitleStyle,
           )
-        : await createTask(submittedUrl, executionMode, dubbingEnabled)
+        : await createTask(submittedUrl, executionMode, dubbingEnabled, subtitleStyle)
       setYoutubeUrl("")
       setBilibiliUrl("")
       setLocalFile(null)
@@ -386,6 +395,131 @@ export default function Home() {
                   aria-describedby="dubbing-enabled-help"
                 />
               </div>
+              <fieldset className="space-y-4 border-t border-border/60 pt-4">
+                <legend className="text-sm font-medium">{t.home.subtitleStyleTitle}</legend>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="subtitle-zh-font">{t.home.subtitleChineseFont}</Label>
+                    <Select
+                      value={subtitleStyle.subtitle_zh_font}
+                      onValueChange={(value) => setSubtitleStyle((current) => ({
+                        ...current,
+                        subtitle_zh_font: value ?? current.subtitle_zh_font,
+                      }))}
+                    >
+                      <SelectTrigger id="subtitle-zh-font" className="h-10">
+                        <span className="min-w-0 truncate text-left">{subtitleStyle.subtitle_zh_font}</span>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {CHINESE_SUBTITLE_FONTS.map((font) => (
+                          <SelectItem key={font} value={font}>{font}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="subtitle-en-font">{t.home.subtitleEnglishFont}</Label>
+                    <Select
+                      value={subtitleStyle.subtitle_en_font}
+                      onValueChange={(value) => setSubtitleStyle((current) => ({
+                        ...current,
+                        subtitle_en_font: value ?? current.subtitle_en_font,
+                      }))}
+                    >
+                      <SelectTrigger id="subtitle-en-font" className="h-10">
+                        <span className="min-w-0 truncate text-left">{subtitleStyle.subtitle_en_font}</span>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {ENGLISH_SUBTITLE_FONTS.map((font) => (
+                          <SelectItem key={font} value={font}>{font}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <Label htmlFor="subtitle-zh-size">{t.home.subtitleChineseSize}</Label>
+                      <output htmlFor="subtitle-zh-size" className="text-xs tabular-nums text-muted-foreground">
+                        {subtitleStyle.subtitle_zh_font_size}px
+                      </output>
+                    </div>
+                    <input
+                      id="subtitle-zh-size"
+                      type="range"
+                      min={MIN_SUBTITLE_FONT_SIZE}
+                      max={MAX_SUBTITLE_FONT_SIZE}
+                      value={subtitleStyle.subtitle_zh_font_size}
+                      onChange={(event) => setSubtitleStyle((current) => ({
+                        ...current,
+                        subtitle_zh_font_size: Number(event.target.value),
+                      }))}
+                      className="h-6 w-full cursor-pointer accent-[#00aeec]"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <Label htmlFor="subtitle-en-size">{t.home.subtitleEnglishSize}</Label>
+                      <output htmlFor="subtitle-en-size" className="text-xs tabular-nums text-muted-foreground">
+                        {subtitleStyle.subtitle_en_font_size}px
+                      </output>
+                    </div>
+                    <input
+                      id="subtitle-en-size"
+                      type="range"
+                      min={MIN_SUBTITLE_FONT_SIZE}
+                      max={MAX_SUBTITLE_FONT_SIZE}
+                      value={subtitleStyle.subtitle_en_font_size}
+                      onChange={(event) => setSubtitleStyle((current) => ({
+                        ...current,
+                        subtitle_en_font_size: Number(event.target.value),
+                      }))}
+                      className="h-6 w-full cursor-pointer accent-[#ff0033]"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>{t.home.subtitlePreview}</Label>
+                  <div
+                    className="relative aspect-video w-full overflow-hidden rounded-md border border-border bg-black"
+                    style={{ containerType: "inline-size" }}
+                  >
+                    <Image
+                      src="/subtitle-preview.jpg"
+                      alt=""
+                      fill
+                      sizes="(max-width: 896px) calc(100vw - 64px), 768px"
+                      className="object-cover"
+                      priority
+                    />
+                    <div
+                      className="absolute inset-x-[7.5%] bottom-[2.3%] break-words text-center font-normal leading-none text-white [overflow-wrap:anywhere]"
+                      style={{
+                        WebkitTextStroke: "0.5208cqw black",
+                        paintOrder: "stroke fill",
+                      }}
+                    >
+                      <p
+                        data-testid="subtitle-preview-zh"
+                        style={{
+                          fontFamily: subtitleStyle.subtitle_zh_font,
+                          fontSize: `${(subtitleStyle.subtitle_zh_font_size / 3.84).toFixed(4)}cqw`,
+                        }}
+                      >
+                        {t.home.subtitlePreviewChinese}
+                      </p>
+                      <p
+                        data-testid="subtitle-preview-en"
+                        style={{
+                          fontFamily: subtitleStyle.subtitle_en_font,
+                          fontSize: `${(subtitleStyle.subtitle_en_font_size / 3.84).toFixed(4)}cqw`,
+                        }}
+                      >
+                        {t.home.subtitlePreviewEnglish}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </fieldset>
               <div className="flex items-center justify-between gap-3">
                 {activeTaskCount !== null && activeTaskCount > 0 ? (
                   <p className="text-xs text-muted-foreground">

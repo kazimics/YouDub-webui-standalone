@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import unicodedata
 from pathlib import Path
 
 from ..config import ffmpeg_binary, ffprobe_binary
+from ..subtitle_style import DEFAULT_SUBTITLE_STYLE, SubtitleStyle
 
 SUBTITLE_PUNCTUATION = {"，", ",", "；", ";", "：", ":", "。", "?", "？", "!", "！", "、"}
 SUBTITLE_PROTECTED_PAIRS = {"《": "》", "（": "）", "【": "】", "「": "」", "『": "』"}
@@ -54,6 +56,16 @@ def _srt_time(ms: int) -> str:
     seconds = ms // 1000
     millis = ms - seconds * 1000
     return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
+
+
+def _ass_time(ms: int) -> str:
+    hours = ms // 3_600_000
+    ms -= hours * 3_600_000
+    minutes = ms // 60_000
+    ms -= minutes * 60_000
+    seconds = ms // 1000
+    centiseconds = (ms - seconds * 1000) // 10
+    return f"{hours}:{minutes:02d}:{seconds:02d}.{centiseconds:02d}"
 
 
 def _split_protected(text: str) -> list[str]:
@@ -220,6 +232,187 @@ def write_srt(translation_file: Path, session: Path) -> Path:
     return output_file
 
 
+def _oriented_font_size(size: int, orientation: str) -> int:
+    return size if orientation == "landscape" else max(6, round(size / 2))
+
+
+def _ass_escape(text: str) -> str:
+    return text.replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}")
+
+
+def _ass_char_width(char: str, font_size: int) -> float:
+    if char.isspace():
+        return font_size * 0.35
+    if unicodedata.east_asian_width(char) in {"W", "F"}:
+        return float(font_size)
+    return font_size * 0.62
+
+
+def _wrap_ass_lines(text: str, font_size: int, max_width: float) -> list[str]:
+    normalized = re.sub(r"\s+", " ", text or "").strip()
+    if not normalized:
+        return []
+    lines: list[str] = []
+    current: list[str] = []
+    current_width = 0.0
+    for char in normalized:
+        char_width = _ass_char_width(char, font_size)
+        if current and current_width + char_width > max_width:
+            break_at = "".join(current).rfind(" ")
+            if break_at > 0:
+                lines.append("".join(current[:break_at]).rstrip())
+                current = current[break_at + 1 :]
+                current_width = sum(_ass_char_width(item, font_size) for item in current)
+            else:
+                lines.append("".join(current).rstrip())
+                current = []
+                current_width = 0.0
+            if char.isspace():
+                continue
+        current.append(char)
+        current_width += char_width
+    if current:
+        lines.append("".join(current).rstrip())
+    return lines
+
+
+def _balanced_chunks(lines: list[str], count: int) -> list[list[str]]:
+    chunks: list[list[str]] = []
+    cursor = 0
+    for index in range(count):
+        remaining = len(lines) - cursor
+        pages_left = count - index
+        take = (remaining + pages_left - 1) // pages_left
+        chunk = lines[cursor : cursor + take]
+        if not chunk and lines:
+            chunk = [lines[-1]]
+        chunks.append(chunk)
+        cursor += take
+    return chunks
+
+
+def _bilingual_ass_pages(
+    zh: str,
+    en: str,
+    zh_size: int,
+    en_size: int,
+    max_width: float,
+    play_res_y: int,
+) -> list[tuple[str, str]]:
+    zh_lines = _wrap_ass_lines(zh, zh_size, max_width)
+    en_lines = _wrap_ass_lines(en, en_size, max_width)
+    available_height = play_res_y * 0.45
+    one_pair_height = zh_size + en_size
+    zh_lines_per_page = 1
+    en_lines_per_page = 1
+    if one_pair_height + zh_size <= available_height:
+        zh_lines_per_page = 2
+    if (
+        one_pair_height
+        + (zh_size if zh_lines_per_page > 1 else 0)
+        + en_size
+        <= available_height
+    ):
+        en_lines_per_page = 2
+    page_count = max(
+        1,
+        (len(zh_lines) + zh_lines_per_page - 1) // zh_lines_per_page,
+        (len(en_lines) + en_lines_per_page - 1) // en_lines_per_page,
+    )
+    zh_chunks = _balanced_chunks(zh_lines, page_count)
+    en_chunks = _balanced_chunks(en_lines, page_count)
+    return [
+        (
+            r"\N".join(_ass_escape(line) for line in zh_chunk),
+            r"\N".join(_ass_escape(line) for line in en_chunk),
+        )
+        for zh_chunk, en_chunk in zip(zh_chunks, en_chunks)
+    ]
+
+
+def write_bilingual_ass(
+    translation_file: Path,
+    session: Path,
+    style: SubtitleStyle,
+    orientation: str,
+) -> Path:
+    data = json.loads(translation_file.read_text(encoding="utf-8"))
+    translation = data["translation"]
+    output_file = session / "metadata" / "subtitles.bilingual.ass"
+    margin_v = 70 if orientation == "portrait" else 5
+    zh_size = _oriented_font_size(style.chinese_font_size, orientation)
+    en_size = _oriented_font_size(style.english_font_size, orientation)
+    play_res_x, play_res_y = ((216, 384) if orientation == "portrait" else (384, 216))
+    max_text_width = play_res_x - 36
+    lines = [
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        f"PlayResX: {play_res_x}",
+        f"PlayResY: {play_res_y}",
+        "WrapStyle: 0",
+        "ScaledBorderAndShadow: yes",
+        "",
+        "[V4+ Styles]",
+        (
+            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+            "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+            "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+            "Alignment, MarginL, MarginR, MarginV, Encoding"
+        ),
+        (
+            f"Style: Chinese,{style.chinese_font},{zh_size},&H00FFFFFF,&H000000FF,"
+            f"&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,{margin_v},1"
+        ),
+        (
+            f"Style: English,{style.english_font},{en_size},&H00FFFFFF,&H000000FF,"
+            f"&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,{margin_v},1"
+        ),
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ]
+    for item in translation:
+        start, end = _segment_times(item)
+        bilingual = _bilingual_text(item)
+        if end <= start or not bilingual:
+            continue
+        zh, en = bilingual.split("\n", 1)
+        pages = _bilingual_ass_pages(
+            zh,
+            en,
+            zh_size,
+            en_size,
+            max_text_width,
+            play_res_y,
+        )
+        durations = _allocate_durations(
+            [f"{zh_page}{en_page}" for zh_page, en_page in pages],
+            end - start,
+        )
+        cursor = start
+        for (zh_page, en_page), duration in zip(pages, durations):
+            text = rf"{{\rChinese}}{zh_page}\N{{\rEnglish}}{en_page}"
+            lines.append(
+                f"Dialogue: 0,{_ass_time(cursor)},{_ass_time(cursor + duration)},"
+                f"Chinese,,0,0,0,,{text}"
+            )
+            cursor += duration
+    output_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return output_file
+
+
+def write_subtitles(
+    translation_file: Path,
+    session: Path,
+    style: SubtitleStyle,
+    orientation: str,
+) -> Path:
+    data = json.loads(translation_file.read_text(encoding="utf-8"))
+    if any(_bilingual_text(item) for item in data["translation"]):
+        return write_bilingual_ass(translation_file, session, style, orientation)
+    return write_srt(translation_file, session)
+
+
 def probe_video_size(video_file: Path) -> tuple[int, int] | None:
     result = subprocess.run(
         [
@@ -273,12 +466,26 @@ def _subtitle_filter_path(subtitle_file: Path, session: Path) -> str:
         raise ValueError("Subtitle file must be inside the session directory.") from exc
 
 
-def subtitle_filter(video_file: Path, subtitle_file: Path, session: Path) -> str:
+def subtitle_filter(
+    video_file: Path,
+    subtitle_file: Path,
+    session: Path,
+    style: SubtitleStyle = DEFAULT_SUBTITLE_STYLE,
+) -> str:
     lang = subtitle_file.stem.rsplit(".", 1)[-1]
-    font = SUBTITLE_FONTS.get(lang, "Arial")
-    style = subtitle_style_for_orientation(get_video_orientation(video_file), font, lang)
     sub_path = _subtitle_filter_path(subtitle_file, session)
-    return f"subtitles=filename='{sub_path}':force_style='{style}'"
+    if subtitle_file.suffix.lower() == ".ass":
+        return f"subtitles=filename='{sub_path}'"
+    orientation = get_video_orientation(video_file)
+    if lang == "zh":
+        font = style.chinese_font
+        size = _oriented_font_size(style.chinese_font_size, orientation)
+    else:
+        font = style.english_font
+        size = _oriented_font_size(style.english_font_size, orientation)
+    margin_v = 70 if orientation == "portrait" else 5
+    force_style = _subtitle_style(font, size, margin_v)
+    return f"subtitles=filename='{sub_path}':force_style='{force_style}'"
 
 
 def _probe_media(media_file: Path) -> tuple[set[str], float]:
@@ -400,7 +607,14 @@ def _reuse_valid_final(final_video: Path, minimum_duration: float) -> bool:
     return False
 
 
-def merge_video(video_file: Path, dubbing_file: Path, bgm_file: Path, timings_file: Path, session: Path) -> Path:
+def merge_video(
+    video_file: Path,
+    dubbing_file: Path,
+    bgm_file: Path,
+    timings_file: Path,
+    session: Path,
+    subtitle_style: SubtitleStyle = DEFAULT_SUBTITLE_STYLE,
+) -> Path:
     tmp_dir = session / "tmp"
     media_dir = session / "media"
     tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -415,7 +629,8 @@ def merge_video(video_file: Path, dubbing_file: Path, bgm_file: Path, timings_fi
     if _reuse_valid_final(final_video, minimum_video_duration):
         return final_video
 
-    subtitles = write_srt(timings_file, session)
+    orientation = get_video_orientation(video_input)
+    subtitles = write_subtitles(timings_file, session, subtitle_style, orientation)
     mixed_audio = tmp_dir / "audio_mixed.m4a"
     mixed_audio_part = tmp_dir / "audio_mixed.part.m4a"
     mixed_audio_output = mixed_audio.resolve()
@@ -453,7 +668,7 @@ def merge_video(video_file: Path, dubbing_file: Path, bgm_file: Path, timings_fi
         "-i",
         str(mixed_audio_output),
         "-vf",
-        subtitle_filter(video_input, subtitles, session_dir),
+        subtitle_filter(video_input, subtitles, session_dir, subtitle_style),
         "-map",
         "0:v:0",
         "-map",
@@ -487,6 +702,7 @@ def merge_video_with_original_audio(
     video_file: Path,
     translation_file: Path,
     session: Path,
+    subtitle_style: SubtitleStyle = DEFAULT_SUBTITLE_STYLE,
 ) -> Path:
     media_dir = session / "media"
     media_dir.mkdir(parents=True, exist_ok=True)
@@ -498,7 +714,8 @@ def merge_video_with_original_audio(
     if _reuse_valid_final(final_video, minimum_video_duration):
         return final_video
 
-    subtitles = write_srt(translation_file, session)
+    orientation = get_video_orientation(video_input)
+    subtitles = write_subtitles(translation_file, session, subtitle_style, orientation)
     final_video_output = final_video.resolve()
     final_video_part = media_dir / "video_final.part.mp4"
     final_video_part_output = final_video_part.resolve()
@@ -508,7 +725,7 @@ def merge_video_with_original_audio(
         "-i",
         str(video_input),
         "-vf",
-        subtitle_filter(video_input, subtitles, session_dir),
+        subtitle_filter(video_input, subtitles, session_dir, subtitle_style),
         "-map",
         "0:v:0",
         "-map",

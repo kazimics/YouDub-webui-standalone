@@ -38,6 +38,10 @@ function taskWithStatus(status: TaskStatus): Task {
     completed_at: null,
     execution_mode: "manual",
     dubbing_enabled: true,
+    subtitle_zh_font: "Microsoft YaHei",
+    subtitle_en_font: "Arial",
+    subtitle_zh_font_size: 20,
+    subtitle_en_font_size: 12,
     stages: [{
       task_id: "task-race",
       name: "download",
@@ -102,6 +106,8 @@ describe("任务详情轮询", () => {
     expect(screen.getByText(/First paragraph/)).toHaveTextContent(
       "First paragraph. Second paragraph.",
     )
+    expect(screen.getByText("Microsoft YaHei · 20px")).toBeInTheDocument()
+    expect(screen.getByText("Arial · 12px")).toBeInTheDocument()
   })
 
   it("continue 返回新状态后不会被动作前的迟到轮询覆盖", async () => {

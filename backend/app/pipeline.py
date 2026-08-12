@@ -474,9 +474,11 @@ class PipelineRunner:
 
     def _merge_video(self, task: dict) -> None:
         from .adapters.ffmpeg import merge_video, merge_video_with_original_audio
+        from .subtitle_style import subtitle_style_from_task
 
         session = _require(self.artifacts.session, "session")
         video_file = _require(self.artifacts.video_file, "video_file")
+        subtitle_style = subtitle_style_from_task(task)
         if bool(task.get("dubbing_enabled", True)):
             dubbing_file = _require(self.artifacts.dubbing_file, "dubbing_file")
             bgm_file = _require(self.artifacts.bgm_file, "bgm_file")
@@ -487,6 +489,7 @@ class PipelineRunner:
                 bgm_file,
                 timings_file,
                 session,
+                subtitle_style,
             )
         else:
             translation_file = _require(self.artifacts.translation_file, "translation_file")
@@ -494,6 +497,7 @@ class PipelineRunner:
                 video_file,
                 translation_file,
                 session,
+                subtitle_style,
             )
         size_mb = self.artifacts.final_video.stat().st_size / (1024 * 1024)
         self.stage_message("merge_video", f"Final video: {self.artifacts.final_video} ({size_mb:.1f} MB)")

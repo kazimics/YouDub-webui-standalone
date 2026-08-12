@@ -131,9 +131,15 @@ def test_merge_video_burns_portrait_subtitles(monkeypatch, tmp_path):
     assert len(ffmpeg_commands) == 2
     final_command = ffmpeg_commands[-1]
     filter_arg = final_command[final_command.index("-vf") + 1]
-    assert filter_arg.startswith("subtitles=filename='metadata/subtitles.bilingual.srt'")
-    assert "FontSize=9" in filter_arg
-    assert "MarginV=70" in filter_arg
+    assert filter_arg == "subtitles=filename='metadata/subtitles.bilingual.ass'"
+    ass = metadata_dir / "subtitles.bilingual.ass"
+    content = ass.read_text(encoding="utf-8")
+    assert "PlayResX: 216" in content
+    assert "PlayResY: 384" in content
+    assert "Style: Chinese,Noto Sans CJK SC,9" in content
+    assert "Style: English,Arial,7" in content
+    assert ",70,1" in content
+    assert r"{\rChinese}你好\N{\rEnglish}Hello" in content
     assert "-c:s" not in final_command
     assert cwd_values[commands.index(final_command)] == session.resolve()
 
@@ -268,7 +274,7 @@ def test_merge_video_with_original_audio_burns_subtitles_and_keeps_source_audio(
     assert render_command[render_command.index("-c:a") + 1] == "aac"
     assert render_command[render_command.index("-b:a") + 1] == "192k"
     assert any(
-        arg.startswith("subtitles=filename='metadata/subtitles.bilingual.srt'")
+        arg.startswith("subtitles=filename='metadata/subtitles.bilingual.ass'")
         for arg in render_command
     )
     assert render_command[-1].endswith("video_final.part.mp4")
@@ -575,6 +581,95 @@ def test_write_srt_puts_chinese_above_english_for_both_directions(tmp_path):
     content = srt.read_text(encoding="utf-8")
     assert "你好，世界。\nHello world." in content
     assert "再见。\nGoodbye." in content
+
+
+def test_write_bilingual_ass_uses_independent_fonts_and_sizes(tmp_path):
+    from backend.app.subtitle_style import SubtitleStyle
+
+    session = tmp_path / "session"
+    metadata_dir = session / "metadata"
+    metadata_dir.mkdir(parents=True)
+    translation = metadata_dir / "translation.json"
+    translation.write_text(
+        json.dumps(
+            {
+                "translation": [
+                    {
+                        "start_time": 0,
+                        "end_time": 1234,
+                        "src_lang": "en",
+                        "dst_lang": "zh",
+                        "src": "Hello {world}.",
+                        "dst": "你好，世界。",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output = ffmpeg.write_bilingual_ass(
+        translation,
+        session,
+        SubtitleStyle("Microsoft YaHei", "Times New Roman", 22, 11),
+        "landscape",
+    )
+
+    content = output.read_text(encoding="utf-8")
+    assert output.name == "subtitles.bilingual.ass"
+    assert "PlayResX: 384" in content
+    assert "PlayResY: 216" in content
+    assert "Style: Chinese,Microsoft YaHei,22" in content
+    assert "Style: English,Times New Roman,11" in content
+    assert r"{\rChinese}你好，世界。\N{\rEnglish}Hello \{world\}." in content
+
+
+def test_write_bilingual_ass_wraps_long_lines_inside_safe_width(tmp_path):
+    from backend.app.subtitle_style import SubtitleStyle
+
+    session = tmp_path / "session"
+    metadata_dir = session / "metadata"
+    metadata_dir.mkdir(parents=True)
+    translation = metadata_dir / "translation.json"
+    translation.write_text(
+        json.dumps(
+            {
+                "translation": [
+                    {
+                        "start_time": 0,
+                        "end_time": 1234,
+                        "src_lang": "en",
+                        "dst_lang": "zh",
+                        "src": "This is a very long English subtitle that must stay inside the video frame.",
+                        "dst": "这是一条非常长的中文字幕需要在视频画面内部自动换行而不能溢出边界。",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output = ffmpeg.write_bilingual_ass(
+        translation,
+        session,
+        SubtitleStyle("Microsoft YaHei", "Times New Roman", 22, 11),
+        "landscape",
+    )
+
+    dialogues = [
+        line for line in output.read_text(encoding="utf-8").splitlines()
+        if line.startswith("Dialogue:")
+    ]
+    assert len(dialogues) >= 2
+    assert all(dialogue.count(r"\N") <= 3 for dialogue in dialogues)
+    assert all(
+        sum(ffmpeg._ass_char_width(char, 11) for char in line) <= 348
+        for line in ffmpeg._wrap_ass_lines(
+            "This is a very long English subtitle that must stay inside the video frame.",
+            11,
+            348,
+        )
+    )
 
 
 def test_probe_video_size_uses_configured_ffprobe(monkeypatch):

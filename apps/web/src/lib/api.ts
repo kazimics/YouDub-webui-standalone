@@ -88,6 +88,34 @@ export type StageStatus = "pending" | "running" | "succeeded" | "failed" | "skip
 export type TaskStatus = "queued" | "running" | "paused" | "succeeded" | "failed"
 export type ExecutionMode = "auto" | "manual"
 
+export const CHINESE_SUBTITLE_FONTS = [
+  "Noto Sans CJK SC",
+  "Microsoft YaHei",
+  "SimHei",
+] as const
+export const ENGLISH_SUBTITLE_FONTS = [
+  "Arial",
+  "Segoe UI",
+  "Calibri",
+  "Times New Roman",
+] as const
+export const MIN_SUBTITLE_FONT_SIZE = 8
+export const MAX_SUBTITLE_FONT_SIZE = 36
+
+export type SubtitleStyleInput = {
+  subtitle_zh_font: string
+  subtitle_en_font: string
+  subtitle_zh_font_size: number
+  subtitle_en_font_size: number
+}
+
+export const DEFAULT_SUBTITLE_STYLE: SubtitleStyleInput = {
+  subtitle_zh_font: CHINESE_SUBTITLE_FONTS[0],
+  subtitle_en_font: ENGLISH_SUBTITLE_FONTS[0],
+  subtitle_zh_font_size: 18,
+  subtitle_en_font_size: 14,
+}
+
 export type TaskStage = {
   task_id: string
   name: string
@@ -117,6 +145,10 @@ export type Task = {
   completed_at: string | null
   execution_mode: ExecutionMode
   dubbing_enabled: boolean
+  subtitle_zh_font: string
+  subtitle_en_font: string
+  subtitle_zh_font_size: number
+  subtitle_en_font_size: number
   stages: TaskStage[]
 }
 
@@ -298,6 +330,7 @@ export function createTask(
   url: string,
   executionMode: ExecutionMode = "auto",
   dubbingEnabled = true,
+  subtitleStyle: SubtitleStyleInput = DEFAULT_SUBTITLE_STYLE,
 ) {
   return request<Task>("/api/tasks", {
     method: "POST",
@@ -305,6 +338,7 @@ export function createTask(
       url,
       execution_mode: executionMode,
       dubbing_enabled: dubbingEnabled,
+      ...subtitleStyle,
     }),
   })
 }
@@ -315,6 +349,7 @@ export async function uploadLocalTask(
   subtitleFile: File | null = null,
   executionMode: ExecutionMode = "auto",
   dubbingEnabled = true,
+  subtitleStyle: SubtitleStyleInput = DEFAULT_SUBTITLE_STYLE,
 ) {
   const form = new FormData()
   form.append("direction", direction)
@@ -324,6 +359,10 @@ export async function uploadLocalTask(
   }
   form.append("execution_mode", executionMode)
   form.append("dubbing_enabled", String(dubbingEnabled))
+  form.append("subtitle_zh_font", subtitleStyle.subtitle_zh_font)
+  form.append("subtitle_en_font", subtitleStyle.subtitle_en_font)
+  form.append("subtitle_zh_font_size", String(subtitleStyle.subtitle_zh_font_size))
+  form.append("subtitle_en_font_size", String(subtitleStyle.subtitle_en_font_size))
 
   const options: RequestInit = {
     method: "POST",

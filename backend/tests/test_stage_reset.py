@@ -15,6 +15,7 @@ def test_collect_artifact_paths_from_translate(tmp_path):
     (metadata / "translation.zh.json").write_text("{}", encoding="utf-8")
     (metadata / "translation_preprocess.json").write_text("{}", encoding="utf-8")
     (metadata / "subtitles.zh.srt").write_text("", encoding="utf-8")
+    (metadata / "subtitles.bilingual.ass").write_text("", encoding="utf-8")
     (session / "segments" / "vocals").mkdir(parents=True)
     (session / "segments" / "tts").mkdir(parents=True)
 
@@ -24,6 +25,7 @@ def test_collect_artifact_paths_from_translate(tmp_path):
 
     assert "metadata/translation_preprocess.json" in relative
     assert "metadata/translation.zh.json" in relative
+    assert "metadata/subtitles.bilingual.ass" in relative
     assert "metadata/asr_fixed.json" not in relative
     assert "segments/vocals" in relative
     assert "segments/tts" in relative
