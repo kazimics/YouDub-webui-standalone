@@ -14,9 +14,9 @@ import requests
 
 from . import runtime_security
 
-PREUPLOAD_URL = "https://member.bilibili.com/x/vupre/web/upload/preupload"
+PREUPLOAD_URL = "https://member.bilibili.com/preupload"
 COVER_UP_URL = "https://member.bilibili.com/x/vu/web/cover/up"
-DRAFT_URL = "https://member.bilibili.com/x/vupre/web/archive/drafts"
+DRAFT_URL = "https://member.bilibili.com/x/vupre/web/draft/add"
 
 CHUNK_RETRY = 3
 CHUNK_RETRY_DELAY = 3.0
@@ -114,7 +114,7 @@ def read_bilibili_credentials(path: Path) -> tuple[str, str]:
     return parse_cookie_file(Path(path))
 
 
-def build_session(sessdata: str) -> requests.Session:
+def build_session(sessdata: str, bili_jct: str = "") -> requests.Session:
     session = requests.Session()
     session.headers.update(
         {
@@ -124,6 +124,8 @@ def build_session(sessdata: str) -> requests.Session:
         }
     )
     session.cookies.set("SESSDATA", sessdata, domain=".bilibili.com", path="/")
+    if bili_jct:
+        session.cookies.set("bili_jct", bili_jct, domain=".bilibili.com", path="/")
     return session
 
 
@@ -272,16 +274,31 @@ def build_draft_payload(
 ) -> dict[str, Any]:
     """构建 B 站草稿投稿 payload（转载，copyright=2）。"""
     return {
-        "videos": [{"filename": filename, "title": title[:MAX_TITLE_LENGTH], "desc": "", "cid": cid}],
+        "videos": [
+            {
+                "filename": filename,
+                "title": title[:MAX_TITLE_LENGTH],
+                "desc": "",
+                "cid": cid,
+                "is_4k": False,
+                "is_8k": False,
+                "is_hdr": False,
+            }
+        ],
         "cover": cover,
         "cover43": "",
         "title": title[:MAX_TITLE_LENGTH],
         "copyright": 2,
         "tid": int(tid),
         "tag": normalize_tags(tag),
+        "human_type2": 0,
+        "topic_id": 0,
+        "mission_id": 0,
+        "topic_name": "",
+        "topic_from": "",
         "desc_format_id": 9999,
         "desc": description[:MAX_DESCRIPTION_LENGTH],
-        "recreate": -1,
+        "recreate": 0,
         "dynamic": "",
         "interactive": 0,
         "act_reserve_create": 0,
@@ -300,16 +317,17 @@ def build_draft_payload(
 
 
 def create_draft(session: requests.Session, payload: dict[str, Any]) -> int:
-    """提交草稿，返回 draft_id。"""
-    response = session.post(DRAFT_URL, json=payload, timeout=REQUEST_TIMEOUT)
+    """提交草稿，返回 draft_id（新版接口不返回时返回 0）。"""
+    cookies = getattr(session, "cookies", None)
+    csrf = (cookies.get("bili_jct") if cookies is not None else None) or payload.get("csrf") or ""
+    params = {"csrf": csrf, "t": int(time.time() * 1000)}
+    response = session.post(DRAFT_URL, json=payload, params=params, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
     result = response.json()
-    if result.get("code") != 0 or not result.get("data"):
+    if result.get("code") != 0:
         raise BilibiliError.from_response(result)
-    draft_id = result["data"].get("draft_id")
-    if not draft_id:
-        raise BilibiliError(-1, "B 站未返回草稿 ID")
-    return int(draft_id)
+    data = result.get("data") or {}
+    return int(data.get("draft_id") or 0)
 
 QR_GENERATE_URL = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate"
 QR_POLL_URL = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll"

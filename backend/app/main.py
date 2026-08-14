@@ -816,7 +816,7 @@ def create_bilibili_draft(task_id: str, payload: BilibiliDraftRequest) -> dict:
     description = (payload.description or task.get("translated_description") or "").strip()
     try:
         sessdata, csrf = bilibili.read_bilibili_credentials(BILIBILI_COOKIE_PATH)
-        session = bilibili.build_session(sessdata)
+        session = bilibili.build_session(sessdata, csrf)
         video_path = Path(final_path)
         pre = bilibili.prepare_upload(session, video_path.name, video_path.stat().st_size)
         filename, cid = bilibili.upload_video(
