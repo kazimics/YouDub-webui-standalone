@@ -9,6 +9,11 @@ function apiProxyTarget() {
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: ["172.27.2.90", "100.94.222.54"],
+  // Bilibili draft upload can take several minutes (542MB video ~100s+);
+  // Next.js rewrite proxy defaults to a 30s timeout -> 500 Internal Server Error.
+  experimental: {
+    proxyTimeout: 900_000, // 15 minutes
+  },
   async rewrites() {
     return [
       {
