@@ -160,7 +160,11 @@ def upload_video(
     chunk_size: int,
     biz_id: int,
 ) -> tuple[str, int]:
-    """上传视频文件并合并分片，返回 (无后缀文件名, biz_id)。"""
+    """上传视频文件并合并分片，返回 (B 站服务器端无后缀文件名, biz_id)。
+
+    filename 必须取自 preupload 返回的 upos_uri（服务器端随机文件名），
+    不能使用本地文件名，否则生成的草稿会因找不到视频而无效。
+    """
     filename = video_path.name
     total_size = video_path.stat().st_size
     url = f"https:{endpoint}/{upos_uri.replace('upos://', '')}"
@@ -226,7 +230,8 @@ def upload_video(
     result = finalize_response.json()
     if result.get("OK") != 1:
         raise BilibiliError.from_response(result)
-    return video_path.stem, int(biz_id)
+    bili_filename = Path(upos_uri.replace('upos://', '')).stem
+    return bili_filename, int(biz_id)
 
 
 def upload_cover(session: requests.Session, csrf: str, image_path: Path) -> str:

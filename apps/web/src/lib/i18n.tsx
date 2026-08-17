@@ -167,10 +167,12 @@ const messages: Record<UiLanguage, Messages> = {
       bilibiliDraftFieldTagPlaceholder: "tech, life (comma separated)",
       bilibiliDraftFieldDescription: "Description",
       bilibiliDraftCreating: "Uploading",
+      bilibiliDraftCreatingHint:
+        "Uploading the video to Bilibili (large videos take 1-2 minutes). Please wait and keep this window open.",
       bilibiliDraftCreate: "Upload draft",
       bilibiliDraftError: "Failed to upload Bilibili draft",
       bilibiliDraftSuccess:
-        "Draft saved (ID: {draftId}). Publish it in Bilibili when ready.",
+        "Draft saved. Review and publish it in Bilibili when ready.",
     },
     settings: {
       button: "Settings",
@@ -393,10 +395,10 @@ const messages: Record<UiLanguage, Messages> = {
       bilibiliDraftFieldTagPlaceholder: "科技, 生活（逗号分隔）",
       bilibiliDraftFieldDescription: "简介",
       bilibiliDraftCreating: "上传中",
+      bilibiliDraftCreatingHint: "正在上传视频到 B 站（大视频约需 1-2 分钟），请耐心等待，不要关闭窗口。",
       bilibiliDraftCreate: "上传草稿",
       bilibiliDraftError: "上传 B 站草稿失败",
-      bilibiliDraftSuccess:
-        "草稿已保存（ID：{draftId}），可在 B 站检查后手动发布。",
+      bilibiliDraftSuccess: "草稿已保存，可在 B 站草稿箱检查后手动发布。",
     },
     settings: {
       button: "设置",

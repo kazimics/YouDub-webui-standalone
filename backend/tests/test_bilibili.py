@@ -90,10 +90,10 @@ def test_upload_video_chunks_and_merges(tmp_path, monkeypatch):
         FakeResponse(json_data={"OK": 1}),
     ]
     result = bilibili.upload_video(
-        session, video, auth="auth", endpoint="//upos.example", upos_uri="upos://bucket/x",
+        session, video, auth="auth", endpoint="//upos.example", upos_uri="upos://ugcever/n260817abc123.mp4",
         chunk_size=4, biz_id=7,
     )
-    assert result == ("clip", 7)
+    assert result == ("n260817abc123", 7)
     assert session.put_calls == 3
     assert session.post_calls == 2
     finalize_body = session.post_bodies[-1]["json"]
@@ -114,10 +114,10 @@ def test_upload_video_retries_chunk(tmp_path, monkeypatch):
         FakeResponse(json_data={"OK": 1}),
     ]
     result = bilibili.upload_video(
-        session, video, auth="auth", endpoint="//upos.example", upos_uri="upos://bucket/x",
+        session, video, auth="auth", endpoint="//upos.example", upos_uri="upos://ugcever/n260817abc123.mp4",
         chunk_size=4, biz_id=7,
     )
-    assert result == ("clip", 7)
+    assert result == ("n260817abc123", 7)
     assert session.put_calls == 3
     assert sleeps == [3.0, 3.0]
 
@@ -130,7 +130,7 @@ def test_upload_video_fails_after_retries(tmp_path):
     session.post_responses = [FakeResponse(json_data={"upload_id": "upload-1"})]
     with pytest.raises(BilibiliError) as exc:
         bilibili.upload_video(
-            session, video, auth="auth", endpoint="//upos.example", upos_uri="upos://bucket/x",
+            session, video, auth="auth", endpoint="//upos.example", upos_uri="upos://ugcever/n260817abc123.mp4",
             chunk_size=4, biz_id=7,
         )
     assert "上传失败" in str(exc.value)

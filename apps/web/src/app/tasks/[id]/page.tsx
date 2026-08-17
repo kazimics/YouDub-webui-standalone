@@ -165,7 +165,6 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
         description: bilibiliDescription.trim(),
       })
       setBilibiliSuccess(result.draft_id)
-      setBilibiliOpen(false)
     } catch (err) {
       setBilibiliError(err instanceof Error ? err.message : t.task.bilibiliDraftError)
     } finally {
@@ -450,6 +449,11 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
                 />
               </div>
               <p className="text-xs text-muted-foreground">{t.task.bilibiliDraftHelper}</p>
+              {bilibiliCreating ? (
+                <p className="text-xs font-medium text-amber-600">
+                  {t.task.bilibiliDraftCreatingHint}
+                </p>
+              ) : null}
               {bilibiliError ? (
                 <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
                   {bilibiliError}
@@ -458,7 +462,7 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
               {bilibiliSuccess !== null ? (
                 <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
                   <CheckCircle2 className="size-4 shrink-0" />
-                  {t.task.bilibiliDraftSuccess.replace("{draftId}", String(bilibiliSuccess))}
+                  {t.task.bilibiliDraftSuccess}
                 </div>
               ) : null}
             </div>
@@ -466,14 +470,20 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
               <DialogClose render={<Button variant="outline" disabled={bilibiliCreating} />}>
                 {t.common.cancel}
               </DialogClose>
-              <Button onClick={handleCreateBilibiliDraft} disabled={bilibiliCreating}>
-                {bilibiliCreating ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <Upload className="size-4" />
-                )}
-                {bilibiliCreating ? t.task.bilibiliDraftCreating : t.task.bilibiliDraftCreate}
-              </Button>
+              {bilibiliSuccess !== null ? (
+                <Button variant="default" onClick={() => setBilibiliOpen(false)}>
+                  {t.common.close}
+                </Button>
+              ) : (
+                <Button onClick={handleCreateBilibiliDraft} disabled={bilibiliCreating}>
+                  {bilibiliCreating ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Upload className="size-4" />
+                  )}
+                  {bilibiliCreating ? t.task.bilibiliDraftCreating : t.task.bilibiliDraftCreate}
+                </Button>
+              )}
             </DialogFooter>
           </DialogContent>
         </Dialog>
