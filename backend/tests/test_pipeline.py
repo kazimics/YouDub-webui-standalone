@@ -5,10 +5,19 @@ import sys
 import types
 from pathlib import Path
 
-from backend.app import database
+import pytest
+
+from backend.app import bilibili_uploader, database
 from backend.app import pipeline
 from backend.app.pipeline import PipelineRunner
 from backend.app.stages import STAGES
+
+
+@pytest.fixture(autouse=True)
+def _disable_bilibili_auto_upload(monkeypatch):
+    monkeypatch.setattr(
+        bilibili_uploader, "submit_bilibili_draft_async", lambda task_id: None
+    )
 
 
 def configure_db(monkeypatch, tmp_path):
@@ -41,7 +50,10 @@ def _cached_session(tmp_path: Path) -> Path:
 
 def test_pipeline_marks_all_stages_succeeded(monkeypatch, tmp_path):
     configure_db(monkeypatch, tmp_path)
-    task_id = database.create_task("https://www.youtube.com/watch?v=abcdefghijk")
+    task_id = database.create_task(
+        "https://www.youtube.com/watch?v=abcdefghijk",
+        bilibili_draft_enabled=False,
+    )
     final_path = tmp_path / "video_final.mp4"
     final_path.write_bytes(b"mp4")
 
@@ -58,8 +70,74 @@ def test_pipeline_marks_all_stages_succeeded(monkeypatch, tmp_path):
 
     assert task["status"] == "succeeded"
     assert task["final_video_path"] == str(final_path)
-    assert [stage["status"] for stage in task["stages"]] == ["succeeded"] * 9
-    assert [stage["progress"] for stage in task["stages"]] == [100] * 9
+    main_stages = [stage for stage in task["stages"] if stage["name"] != "bilibili_draft"]
+    assert [stage["status"] for stage in main_stages] == ["succeeded"] * 9
+    assert [stage["progress"] for stage in main_stages] == [100] * 9
+
+
+def _run_successful_pipeline(monkeypatch, tmp_path, task_id):
+    final_path = tmp_path / "video_final.mp4"
+    final_path.write_bytes(b"mp4")
+
+    for name in (
+        "_download",
+        "_separate",
+        "_asr",
+        "_asr_fix",
+        "_translate",
+        "_split_audio",
+        "_tts",
+        "_merge_audio",
+    ):
+        monkeypatch.setattr(PipelineRunner, name, _noop_stage)
+
+    def merge_video(self, task):
+        self.artifacts.final_video = final_path
+
+    monkeypatch.setattr(PipelineRunner, "_merge_video", merge_video)
+    PipelineRunner(task_id).run()
+
+
+def test_pipeline_starts_bilibili_draft_upload_when_enabled(monkeypatch, tmp_path):
+    configure_db(monkeypatch, tmp_path)
+    task_id = database.create_task(
+        "https://www.youtube.com/watch?v=autodraftvid",
+        task_id="autodraftvid",
+    )
+    started: list[str] = []
+    monkeypatch.setattr(
+        bilibili_uploader,
+        "submit_bilibili_draft_async",
+        lambda task_id: started.append(task_id),
+    )
+
+    _run_successful_pipeline(monkeypatch, tmp_path, task_id)
+
+    assert started == ["autodraftvid"]
+    log = database.log_path(task_id).read_text(encoding="utf-8")
+    assert "[bilibili_draft] Auto-upload to Bilibili drafts started" in log
+
+
+def test_pipeline_skips_bilibili_draft_upload_when_disabled(monkeypatch, tmp_path):
+    configure_db(monkeypatch, tmp_path)
+    task_id = database.create_task(
+        "https://www.youtube.com/watch?v=nodraftauto",
+        task_id="nodraftauto",
+        bilibili_draft_enabled=False,
+    )
+    started: list[str] = []
+    monkeypatch.setattr(
+        bilibili_uploader,
+        "submit_bilibili_draft_async",
+        lambda task_id: started.append(task_id),
+    )
+
+    _run_successful_pipeline(monkeypatch, tmp_path, task_id)
+
+    assert started == []
+    assert "Auto-upload to Bilibili drafts started" not in database.log_path(task_id).read_text(
+        encoding="utf-8"
+    )
 
 
 def test_translate_stage_saves_translated_metadata_on_task(monkeypatch, tmp_path):
@@ -327,6 +405,7 @@ def test_pipeline_manual_completes_immediately_after_final_stage(monkeypatch, tm
         "https://www.youtube.com/watch?v=manualfinal",
         task_id="manualfinal",
         execution_mode="manual",
+        bilibili_draft_enabled=False,
     )
     session = _cached_session(tmp_path)
     final_path = session / "media" / "video_final.mp4"
@@ -369,7 +448,9 @@ def test_pipeline_manual_completes_immediately_after_final_stage(monkeypatch, tm
 
         PipelineRunner(task_id).run()
         task = database.get_task(task_id)
-        stage_statuses = [entry["status"] for entry in task["stages"]]
+        stage_statuses = [
+            entry["status"] for entry in task["stages"] if entry["name"] != "bilibili_draft"
+        ]
 
         assert stage_statuses[: index + 1] == ["succeeded"] * (index + 1)
         assert stage_statuses[index + 1 :] == ["pending"] * (len(STAGES) - index - 1)
@@ -385,7 +466,8 @@ def test_pipeline_manual_completes_immediately_after_final_stage(monkeypatch, tm
             assert task["completed_at"] is not None
 
     assert visited == [stage.name for stage in STAGES]
-    assert [stage["progress"] for stage in task["stages"]] == [100] * len(STAGES)
+    main_stages = [stage for stage in task["stages"] if stage["name"] != "bilibili_draft"]
+    assert [stage["progress"] for stage in main_stages] == [100] * len(STAGES)
     log_content = database.log_path(task_id).read_text(encoding="utf-8")
     assert "Task succeeded" in log_content
     assert "Paused after [merge_video]" not in log_content
@@ -397,6 +479,7 @@ def test_pipeline_manual_switch_to_auto_runs_remaining_stages(monkeypatch, tmp_p
         "https://www.youtube.com/watch?v=manual2auto",
         task_id="manual2auto",
         execution_mode="manual",
+        bilibili_draft_enabled=False,
     )
     final_path = tmp_path / "video_final.mp4"
 
@@ -431,7 +514,11 @@ def test_pipeline_manual_switch_to_auto_runs_remaining_stages(monkeypatch, tmp_p
     task = database.get_task(task_id)
     assert task["status"] == "succeeded"
     assert task["execution_mode"] == "auto"
-    assert all(stage["status"] == "succeeded" for stage in task["stages"])
+    assert all(
+        stage["status"] == "succeeded"
+        for stage in task["stages"]
+        if stage["name"] != "bilibili_draft"
+    )
 
 
 def test_pipeline_without_dubbing_skips_voice_stages_without_manual_pauses(

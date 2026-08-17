@@ -61,7 +61,8 @@ def init_db() -> None:
               started_at TEXT,
               completed_at TEXT,
               execution_mode TEXT NOT NULL DEFAULT 'auto',
-              dubbing_enabled INTEGER NOT NULL DEFAULT 1 CHECK (dubbing_enabled IN (0, 1))
+              dubbing_enabled INTEGER NOT NULL DEFAULT 1 CHECK (dubbing_enabled IN (0, 1)),
+              bilibili_draft_enabled INTEGER NOT NULL DEFAULT 1 CHECK (bilibili_draft_enabled IN (0, 1))
             );
 
             CREATE TABLE IF NOT EXISTS task_stages (
@@ -144,6 +145,10 @@ def init_db() -> None:
         if "dubbing_enabled" not in task_columns:
             conn.execute(
                 "ALTER TABLE tasks ADD COLUMN dubbing_enabled INTEGER NOT NULL DEFAULT 1"
+            )
+        if "bilibili_draft_enabled" not in task_columns:
+            conn.execute(
+                "ALTER TABLE tasks ADD COLUMN bilibili_draft_enabled INTEGER NOT NULL DEFAULT 1"
             )
         stage_columns = {row["name"] for row in conn.execute("PRAGMA table_info(task_stages)").fetchall()}
         if "progress" not in stage_columns:
@@ -310,6 +315,7 @@ def create_task(
     *,
     execution_mode: str = DEFAULT_EXECUTION_MODE,
     dubbing_enabled: bool = True,
+    bilibili_draft_enabled: bool = True,
     subtitle_style: SubtitleStyle = DEFAULT_SUBTITLE_STYLE,
 ) -> str:
     new_id = task_id or str(uuid.uuid4())
@@ -320,10 +326,11 @@ def create_task(
             """
             INSERT INTO tasks (
               id, url, status, current_stage, created_at, execution_mode, dubbing_enabled,
+              bilibili_draft_enabled,
               subtitle_zh_font, subtitle_en_font,
               subtitle_zh_font_size, subtitle_en_font_size
             )
-            VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 new_id,
@@ -332,6 +339,7 @@ def create_task(
                 created_at,
                 mode,
                 int(dubbing_enabled),
+                int(bilibili_draft_enabled),
                 subtitle_style.chinese_font,
                 subtitle_style.english_font,
                 subtitle_style.chinese_font_size,
@@ -344,6 +352,13 @@ def create_task(
             VALUES (?, ?, ?, 'pending')
             """,
             [(new_id, stage.name, stage.label) for stage in STAGES],
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO task_stages (task_id, name, label, status)
+            VALUES (?, 'bilibili_draft', 'Bilibili draft', ?)
+            """,
+            (new_id, "pending" if bilibili_draft_enabled else "skipped"),
         )
     return new_id
 
@@ -398,13 +413,14 @@ def latest_task_id() -> str | None:
 
 TASK_SUMMARY_COLUMNS = (
     "id, url, title, status, current_stage, final_video_path, error_message, "
-    "created_at, started_at, completed_at, execution_mode, dubbing_enabled"
+    "created_at, started_at, completed_at, execution_mode, dubbing_enabled, bilibili_draft_enabled"
 )
 
 
 def _task_dict(row: sqlite3.Row) -> dict[str, Any]:
     result = dict(row)
     result["dubbing_enabled"] = bool(result.get("dubbing_enabled", 1))
+    result["bilibili_draft_enabled"] = bool(result.get("bilibili_draft_enabled", 1))
     return result
 
 
@@ -525,6 +541,7 @@ def get_task(task_id: str) -> dict[str, Any] | None:
                 WHEN 'tts' THEN 7
                 WHEN 'merge_audio' THEN 8
                 WHEN 'merge_video' THEN 9
+                WHEN 'bilibili_draft' THEN 10
                 ELSE 99
               END
             """,

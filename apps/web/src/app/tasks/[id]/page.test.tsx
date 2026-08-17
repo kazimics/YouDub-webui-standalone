@@ -38,6 +38,7 @@ function taskWithStatus(status: TaskStatus): Task {
     completed_at: null,
     execution_mode: "manual",
     dubbing_enabled: true,
+    bilibili_draft_enabled: true,
     subtitle_zh_font: "Microsoft YaHei",
     subtitle_en_font: "Arial",
     subtitle_zh_font_size: 20,

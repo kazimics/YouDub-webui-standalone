@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 import requests
 
-from backend.app import bilibili, database, main
+from backend.app import bilibili, bilibili_uploader, database, main
 from backend.app.bilibili import BilibiliError
 from backend.tests.test_settings_and_api import authenticated_client, configure_tmp_runtime
 
@@ -297,7 +297,7 @@ def test_bilibili_draft_api_success(monkeypatch, tmp_path):
     cookie_file.parent.mkdir(parents=True, exist_ok=True)
     cookie_file.write_text("SESSDATA=sess\nbili_jct=csrf\n", encoding="utf-8")
     monkeypatch.setattr(
-        main.bilibili,
+        bilibili_uploader.bilibili,
         "prepare_upload",
         lambda *a, **k: {
             "auth": "auth",
@@ -307,9 +307,9 @@ def test_bilibili_draft_api_success(monkeypatch, tmp_path):
             "biz_id": 9,
         },
     )
-    monkeypatch.setattr(main.bilibili, "upload_video", lambda *a, **k: ("final", 42))
-    monkeypatch.setattr(main.bilibili, "upload_cover", lambda *a, **k: "//cover.jpg")
-    monkeypatch.setattr(main.bilibili, "create_draft", lambda *a, **k: 999)
+    monkeypatch.setattr(bilibili_uploader.bilibili, "upload_video", lambda *a, **k: ("final", 42))
+    monkeypatch.setattr(bilibili_uploader.bilibili, "upload_cover", lambda *a, **k: "//cover.jpg")
+    monkeypatch.setattr(bilibili_uploader.bilibili, "create_draft", lambda *a, **k: 999)
     client = authenticated_client()
     response = client.post(
         f"/api/tasks/{task_id}/bilibili/draft",
@@ -522,3 +522,67 @@ def test_bilibili_qr_api_poll_error(monkeypatch, tmp_path):
     response = client.post("/api/cookies/bilibili/qr/poll", json={"qrcode_key": "key1"})
     assert response.status_code == 502
     assert "完整 Cookie" in response.json()["detail"]
+
+
+def test_bilibili_draft_stage_inserted_per_enabled_setting(monkeypatch, tmp_path):
+    configure_tmp_runtime(monkeypatch, tmp_path)
+    enabled_id = database.create_task(
+        "https://example.com/bili-stage-on", task_id="bili-stage-on"
+    )
+    disabled_id = database.create_task(
+        "https://example.com/bili-stage-off",
+        task_id="bili-stage-off",
+        bilibili_draft_enabled=False,
+    )
+
+    enabled = database.get_task(enabled_id)
+    disabled = database.get_task(disabled_id)
+    assert enabled["bilibili_draft_enabled"] is True
+    assert disabled["bilibili_draft_enabled"] is False
+    enabled_stages = {stage["name"]: stage for stage in enabled["stages"]}
+    disabled_stages = {stage["name"]: stage for stage in disabled["stages"]}
+    assert enabled_stages["bilibili_draft"]["status"] == "pending"
+    assert disabled_stages["bilibili_draft"]["status"] == "skipped"
+
+
+def test_bilibili_auto_upload_succeeded_stage_and_keeps_task_succeeded(monkeypatch, tmp_path):
+    configure_tmp_runtime(monkeypatch, tmp_path)
+    task_id = _make_succeeded_task(tmp_path)
+    monkeypatch.setattr(
+        bilibili_uploader,
+        "submit_bilibili_draft",
+        lambda *a, **k: {"draft_id": 123, "aid": 0, "title": "Auto", "cover": ""},
+    )
+
+    thread = bilibili_uploader.submit_bilibili_draft_async(task_id)
+    thread.join(timeout=10)
+
+    task = database.get_task(task_id)
+    assert task["status"] == "succeeded"
+    stage = {entry["name"]: entry for entry in task["stages"]}["bilibili_draft"]
+    assert stage["status"] == "succeeded"
+    assert stage["progress"] == 100
+    assert "Draft created: 123" in stage["last_message"]
+    log = database.log_path(task_id).read_text(encoding="utf-8")
+    assert "[bilibili_draft] Draft created" in log
+
+
+def test_bilibili_auto_upload_failure_keeps_task_succeeded(monkeypatch, tmp_path):
+    configure_tmp_runtime(monkeypatch, tmp_path)
+    task_id = _make_succeeded_task(tmp_path)
+    monkeypatch.setattr(
+        bilibili_uploader,
+        "submit_bilibili_draft",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("upload boom")),
+    )
+
+    thread = bilibili_uploader.submit_bilibili_draft_async(task_id)
+    thread.join(timeout=10)
+
+    task = database.get_task(task_id)
+    assert task["status"] == "succeeded"
+    stage = {entry["name"]: entry for entry in task["stages"]}["bilibili_draft"]
+    assert stage["status"] == "failed"
+    assert stage["error_message"] == "upload boom"
+    log = database.log_path(task_id).read_text(encoding="utf-8")
+    assert "[bilibili_draft] Auto-upload failed: upload boom" in log

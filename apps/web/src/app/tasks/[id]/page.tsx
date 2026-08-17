@@ -251,11 +251,12 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
   const redoConfirmStageInfo = task?.stages.find((stage) => stage.name === redoConfirmStage)
 
   const progress = useMemo(() => {
-    if (!task?.stages?.length) return 0
-    const completed = task.stages.filter(
+    const stages = task?.stages.filter((stage) => stage.name !== "bilibili_draft") || []
+    if (!stages.length) return 0
+    const completed = stages.filter(
       (stage) => stage.status === "succeeded" || stage.status === "skipped",
     ).length
-    return Math.round((completed / task.stages.length) * 100)
+    return Math.round((completed / stages.length) * 100)
   }, [task])
 
   if (error && !task) {
@@ -506,7 +507,7 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
                 {task.stages.map((stage, index) => {
                   const stageProgress = normalizeProgress(stage.progress)
                   const showRedo =
-                    canRedoStage && stage.status !== "skipped" &&
+                    canRedoStage && stage.name !== "bilibili_draft" && stage.status !== "skipped" &&
                     (stage.status === "succeeded" || stage.status === "failed")
                   return (
                     <li

@@ -162,7 +162,9 @@ def test_task_id_is_video_id_and_dedupes_existing(monkeypatch, tmp_path):
     assert first.json()["id"] == "abcdefghijk"
     assert second.json()["id"] == "abcdefghijk"
     assert first.json()["dubbing_enabled"] is True
+    assert first.json()["bilibili_draft_enabled"] is True
     assert second.json()["dubbing_enabled"] is True
+    assert second.json()["bilibili_draft_enabled"] is True
     assert enqueued == ["abcdefghijk"]
 
 
@@ -184,6 +186,23 @@ def test_same_video_with_different_dubbing_setting_returns_conflict(monkeypatch,
     assert conflicting.status_code == 409
     assert "different output settings" in conflicting.json()["detail"]
     assert enqueued == ["abcdefghijk"]
+
+
+def test_create_task_bilibili_draft_enabled_setting(monkeypatch, tmp_path):
+    configure_tmp_runtime(monkeypatch, tmp_path)
+    enqueued: list[str] = []
+    monkeypatch.setattr(main.worker, "enqueue", lambda task_id: enqueued.append(task_id))
+    client = authenticated_client()
+    url = "https://www.youtube.com/watch?v=draftoffvid"
+
+    response = client.post("/api/tasks", json={"url": url, "bilibili_draft_enabled": False})
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["bilibili_draft_enabled"] is False
+    stage = {entry["name"]: entry for entry in body["stages"]}["bilibili_draft"]
+    assert stage["status"] == "skipped"
+    assert enqueued == ["draftoffvid"]
 
 
 def test_task_creation_validates_and_dedupes_subtitle_style(monkeypatch, tmp_path):
@@ -261,8 +280,10 @@ def test_init_db_migrates_existing_tasks_to_current_schema(monkeypatch, tmp_path
     assert "subtitle_en_font" in columns
     assert "subtitle_zh_font_size" in columns
     assert "subtitle_en_font_size" in columns
+    assert "bilibili_draft_enabled" in columns
     task = database.get_task("legacy")
     assert task["dubbing_enabled"] is True
+    assert task["bilibili_draft_enabled"] is True
     assert task["translated_title"] is None
     assert task["translated_description"] is None
     assert task["thumbnail_path"] is None
@@ -660,6 +681,7 @@ def test_rerun_task_purges_session_and_requeues(monkeypatch, tmp_path):
         "https://www.youtube.com/watch?v=rerunvideox",
         task_id="rerunvideox",
         dubbing_enabled=False,
+        bilibili_draft_enabled=False,
         subtitle_style=SubtitleStyle("Microsoft YaHei", "Calibri", 20, 10),
     )
     session = config.WORKFOLDER / "uploader" / "title__rerunvideox"
@@ -678,6 +700,7 @@ def test_rerun_task_purges_session_and_requeues(monkeypatch, tmp_path):
     assert body["status"] == "queued"
     assert body["session_path"] is None
     assert body["dubbing_enabled"] is False
+    assert body["bilibili_draft_enabled"] is False
     assert body["subtitle_zh_font"] == "Microsoft YaHei"
     assert body["subtitle_en_font"] == "Calibri"
     assert body["subtitle_zh_font_size"] == 20

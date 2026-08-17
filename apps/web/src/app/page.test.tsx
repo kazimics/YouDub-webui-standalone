@@ -93,6 +93,7 @@ describe("本地视频字幕选择", () => {
     expect((form.get("file") as File).name).toBe("video-b.mp4")
     expect(form.has("subtitle_file")).toBe(false)
     expect(form.get("dubbing_enabled")).toBe("false")
+    expect(form.get("bilibili_draft_enabled")).toBe("true")
     expect(form.get("subtitle_zh_font")).toBe("Noto Sans CJK SC")
     expect(form.get("subtitle_en_font")).toBe("Arial")
     expect(form.get("subtitle_zh_font_size")).toBe("12")
@@ -137,6 +138,9 @@ describe("配音开关", () => {
     const dubbingSwitch = screen.getByRole("switch", { name: "生成配音" })
     expect(dubbingSwitch).toBeChecked()
     expect(screen.getByText("关闭后保留视频原声，仍会翻译并压制中英双语字幕。")).toBeInTheDocument()
+    const bilibiliSwitch = screen.getByRole("switch", { name: "完成后自动上传 B 站草稿" })
+    expect(bilibiliSwitch).toBeChecked()
+    expect(screen.getByText("默认开启。任务完成后会自动把成片上传到你的 B 站草稿箱，之后你随时可以手动发布。")).toBeInTheDocument()
 
     await user.click(dubbingSwitch)
     expect(dubbingSwitch).not.toBeChecked()
@@ -155,6 +159,64 @@ describe("配音开关", () => {
     expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
       execution_mode: "auto",
       dubbing_enabled: false,
+      bilibili_draft_enabled: true,
+    })
+  })
+})
+
+describe("B站草稿上传开关", () => {
+  it("关闭后通过 URL 创建任务会提交 bilibili_draft_enabled=false", async () => {
+    mocks.fetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path === "/api/tasks" && init?.method === "POST") {
+        return new Response(JSON.stringify({ id: "draft-off-task" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      }
+      if (path.startsWith("/api/tasks")) {
+        return new Response(JSON.stringify({
+          tasks: [],
+          total: 0,
+          active_count: 0,
+          page: 1,
+          page_size: 20,
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      }
+      throw new Error(`未预期的请求: ${path}`)
+    })
+    vi.stubGlobal("fetch", mocks.fetch)
+
+    const user = userEvent.setup()
+    render(
+      <LanguageProvider>
+        <Home />
+      </LanguageProvider>,
+    )
+
+    const bilibiliSwitch = screen.getByRole("switch", { name: "完成后自动上传 B 站草稿" })
+    expect(bilibiliSwitch).toBeChecked()
+    await user.click(bilibiliSwitch)
+    expect(bilibiliSwitch).not.toBeChecked()
+    await user.type(
+      screen.getByLabelText(/YouTube 链接/),
+      "https://www.youtube.com/watch?v=draftoffvideo",
+    )
+    await user.click(screen.getByRole("button", { name: "创建任务" }))
+
+    await waitFor(() => {
+      expect(mocks.push).toHaveBeenCalledWith("/tasks/draft-off-task")
+    })
+    const createCall = mocks.fetch.mock.calls.find(
+      ([input, init]) => String(input) === "/api/tasks" && init?.method === "POST",
+    )
+    expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
+      execution_mode: "auto",
+      dubbing_enabled: true,
+      bilibili_draft_enabled: false,
     })
   })
 })

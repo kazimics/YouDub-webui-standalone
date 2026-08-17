@@ -102,6 +102,7 @@ export default function Home() {
   const [localDirection, setLocalDirection] = useState<LocalDirection>("en-zh")
   const [executionMode, setExecutionMode] = useState<ExecutionMode>("auto")
   const [dubbingEnabled, setDubbingEnabled] = useState(true)
+  const [bilibiliDraftEnabled, setBilibiliDraftEnabled] = useState(true)
   const [subtitleStyle, setSubtitleStyle] = useState<SubtitleStyleInput>(DEFAULT_SUBTITLE_STYLE)
   const [tasks, setTasks] = useState<TaskSummary[]>([])
   const [taskTotal, setTaskTotal] = useState(0)
@@ -235,8 +236,15 @@ export default function Home() {
             executionMode,
             dubbingEnabled,
             subtitleStyle,
+            bilibiliDraftEnabled,
           )
-        : await createTask(submittedUrl, executionMode, dubbingEnabled, subtitleStyle)
+        : await createTask(
+            submittedUrl,
+            executionMode,
+            dubbingEnabled,
+            subtitleStyle,
+            bilibiliDraftEnabled,
+          )
       setYoutubeUrl("")
       setBilibiliUrl("")
       setLocalFile(null)
@@ -393,6 +401,21 @@ export default function Home() {
                   onCheckedChange={setDubbingEnabled}
                   aria-label={t.home.dubbingEnabledLabel}
                   aria-describedby="dubbing-enabled-help"
+                />
+              </div>
+              <div className="flex items-center justify-between gap-4 rounded-lg border border-border/60 bg-muted/30 px-3 py-3">
+                <div className="space-y-1">
+                  <Label htmlFor="bilibili-draft-enabled">{t.home.bilibiliDraftEnabledLabel}</Label>
+                  <p id="bilibili-draft-enabled-help" className="text-xs leading-5 text-muted-foreground">
+                    {t.home.bilibiliDraftEnabledHelp}
+                  </p>
+                </div>
+                <Switch
+                  id="bilibili-draft-enabled"
+                  checked={bilibiliDraftEnabled}
+                  onCheckedChange={setBilibiliDraftEnabled}
+                  aria-label={t.home.bilibiliDraftEnabledLabel}
+                  aria-describedby="bilibili-draft-enabled-help"
                 />
               </div>
               <fieldset className="space-y-4 border-t border-border/60 pt-4">

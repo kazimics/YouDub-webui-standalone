@@ -125,6 +125,7 @@ class PipelineRunner:
                 completed_at=database.now_iso(),
             )
             self.log("Task succeeded")
+            self._maybe_start_bilibili_draft_upload()
         except Exception as exc:
             current = database.get_task(self.task_id)
             failed_stage = current["current_stage"] if current else None
@@ -144,6 +145,19 @@ class PipelineRunner:
                 completed_at=database.now_iso(),
             )
             self.log("Task failed")
+            self.log(traceback.format_exc())
+
+    def _maybe_start_bilibili_draft_upload(self) -> None:
+        task = database.get_task(self.task_id)
+        if not task or not bool(task.get("bilibili_draft_enabled", True)):
+            return
+        try:
+            from .bilibili_uploader import submit_bilibili_draft_async
+
+            submit_bilibili_draft_async(self.task_id)
+            self.log("[bilibili_draft] Auto-upload to Bilibili drafts started")
+        except Exception:
+            self.log("[bilibili_draft] Failed to start auto-upload thread")
             self.log(traceback.format_exc())
 
     def log(self, message: str) -> None:

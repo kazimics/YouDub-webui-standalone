@@ -75,6 +75,7 @@ class TaskCreate(BaseModel):
     url: str
     execution_mode: str = "auto"
     dubbing_enabled: bool = True
+    bilibili_draft_enabled: bool = True
     subtitle_zh_font: str = DEFAULT_CHINESE_FONT
     subtitle_en_font: str = DEFAULT_ENGLISH_FONT
     subtitle_zh_font_size: int = DEFAULT_CHINESE_FONT_SIZE
@@ -393,6 +394,7 @@ def create_task(payload: TaskCreate) -> dict:
         task_id=validated_url.video_id,
         execution_mode=normalize_execution_mode(payload.execution_mode),
         dubbing_enabled=payload.dubbing_enabled,
+        bilibili_draft_enabled=payload.bilibili_draft_enabled,
         subtitle_style=subtitle_style,
     )
     worker.enqueue(task_id)
@@ -472,6 +474,7 @@ def upload_local_video(
     subtitle_file: UploadFile | None = File(None),
     execution_mode: str = Form("auto"),
     dubbing_enabled: bool = Form(True),
+    bilibili_draft_enabled: bool = Form(True),
     subtitle_zh_font: str = Form(DEFAULT_CHINESE_FONT),
     subtitle_en_font: str = Form(DEFAULT_ENGLISH_FONT),
     subtitle_zh_font_size: int = Form(DEFAULT_CHINESE_FONT_SIZE),
@@ -521,6 +524,7 @@ def upload_local_video(
             task_id=task_id,
             execution_mode=normalized_execution_mode,
             dubbing_enabled=dubbing_enabled,
+            bilibili_draft_enabled=bilibili_draft_enabled,
             subtitle_style=subtitle_style,
         )
         database.update_task(task_id, title=Path(original_name).stem)
@@ -663,6 +667,7 @@ def rerun_task(task_id: str) -> dict:
     url = task["url"]
     execution_mode = task.get("execution_mode") or database.DEFAULT_EXECUTION_MODE
     dubbing_enabled = bool(task.get("dubbing_enabled", True))
+    bilibili_draft_enabled = bool(task.get("bilibili_draft_enabled", True))
     subtitle_style = normalize_subtitle_style(
         task["subtitle_zh_font"],
         task["subtitle_en_font"],
@@ -675,6 +680,7 @@ def rerun_task(task_id: str) -> dict:
         task_id=task_id,
         execution_mode=execution_mode,
         dubbing_enabled=dubbing_enabled,
+        bilibili_draft_enabled=bilibili_draft_enabled,
         subtitle_style=subtitle_style,
     )
     worker.enqueue(new_id)
@@ -781,71 +787,61 @@ def task_thumbnail(task_id: str) -> FileResponse:
     return FileResponse(path)
 
 
-def _bilibili_upload_cover(session: requests.Session, csrf: str, task: dict) -> str:
-    thumbnail_path = task.get("thumbnail_path")
-    session_path = task.get("session_path")
-    if not thumbnail_path or not session_path:
-        return ""
-    path = Path(thumbnail_path).resolve()
-    media_dir = (Path(session_path) / "media").resolve()
-    try:
-        path.relative_to(media_dir)
-    except ValueError:
-        return ""
-    if not path.is_file():
-        return ""
-    return bilibili.upload_cover(session, csrf, path)
-
-
 @app.post("/api/tasks/{task_id}/bilibili/draft")
 def create_bilibili_draft(task_id: str, payload: BilibiliDraftRequest) -> dict:
-    task = database.get_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found.")
-    if task.get("status") != "succeeded":
-        raise HTTPException(status_code=409, detail="Only succeeded tasks can be uploaded to Bilibili.")
-    final_path = task.get("final_video_path")
-    if not final_path or not Path(final_path).is_file():
-        raise HTTPException(status_code=409, detail="Final video is not available.")
-    title = (
-        payload.title.strip()
-        or (task.get("translated_title") or task.get("title") or "").strip()
-    ).strip()
-    if not title:
-        raise HTTPException(status_code=422, detail="Bilibili draft title is required.")
-    description = (payload.description or task.get("translated_description") or "").strip()
+    from .bilibili_uploader import (
+        BILIBILI_DRAFT_STAGE,
+        BilibiliDraftError,
+        submit_bilibili_draft,
+    )
+
     try:
-        sessdata, csrf = bilibili.read_bilibili_credentials(BILIBILI_COOKIE_PATH)
-        session = bilibili.build_session(sessdata, csrf)
-        video_path = Path(final_path)
-        pre = bilibili.prepare_upload(session, video_path.name, video_path.stat().st_size)
-        filename, cid = bilibili.upload_video(
-            session,
-            video_path,
-            pre["auth"],
-            pre["endpoint"],
-            pre["upos_uri"],
-            pre["chunk_size"],
-            pre["biz_id"],
-        )
-        cover = _bilibili_upload_cover(session, csrf, task)
-        draft_payload = bilibili.build_draft_payload(
-            csrf=csrf,
-            title=title,
+        result = submit_bilibili_draft(
+            task_id,
+            title=payload.title,
             tid=payload.tid,
             tag=payload.tag,
-            description=description,
-            filename=filename,
-            cid=cid,
-            cover=cover,
-            source=task.get("url") or "",
+            description=payload.description,
         )
-        draft_id = bilibili.create_draft(session, draft_payload)
+    except BilibiliDraftError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     except bilibili.BilibiliError as exc:
+        try:
+            database.update_stage(
+                task_id,
+                BILIBILI_DRAFT_STAGE,
+                status="failed",
+                completed_at=database.now_iso(),
+                last_message="Failed",
+                error_message=str(exc),
+            )
+        except Exception:
+            logger.exception("Failed to mark bilibili_draft stage failed for task %s", task_id)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except requests.RequestException as exc:
+        try:
+            database.update_stage(
+                task_id,
+                BILIBILI_DRAFT_STAGE,
+                status="failed",
+                completed_at=database.now_iso(),
+                last_message="Failed",
+                error_message=f"Bilibili request failed: {exc}",
+            )
+        except Exception:
+            logger.exception("Failed to mark bilibili_draft stage failed for task %s", task_id)
         raise HTTPException(status_code=502, detail=f"Bilibili request failed: {exc}") from exc
-    return {"draft_id": draft_id, "aid": 0, "title": title, "cover": cover}
+    database.update_stage(
+        task_id,
+        BILIBILI_DRAFT_STAGE,
+        status="succeeded",
+        progress=100,
+        started_at=database.now_iso(),
+        completed_at=database.now_iso(),
+        last_message=f"Draft created: {result['draft_id']}",
+        error_message=None,
+    )
+    return result
 
 
 @app.get("/api/cookies/youtube")

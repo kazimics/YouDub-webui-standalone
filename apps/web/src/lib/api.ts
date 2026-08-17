@@ -145,6 +145,7 @@ export type Task = {
   completed_at: string | null
   execution_mode: ExecutionMode
   dubbing_enabled: boolean
+  bilibili_draft_enabled: boolean
   subtitle_zh_font: string
   subtitle_en_font: string
   subtitle_zh_font_size: number
@@ -236,6 +237,7 @@ export type TaskSummary = {
   completed_at: string | null
   execution_mode?: ExecutionMode
   dubbing_enabled: boolean
+  bilibili_draft_enabled: boolean
 }
 
 export type TaskListStatus = "all" | TaskStatus
@@ -331,6 +333,7 @@ export function createTask(
   executionMode: ExecutionMode = "auto",
   dubbingEnabled = true,
   subtitleStyle: SubtitleStyleInput = DEFAULT_SUBTITLE_STYLE,
+  bilibiliDraftEnabled = true,
 ) {
   return request<Task>("/api/tasks", {
     method: "POST",
@@ -338,6 +341,7 @@ export function createTask(
       url,
       execution_mode: executionMode,
       dubbing_enabled: dubbingEnabled,
+      bilibili_draft_enabled: bilibiliDraftEnabled,
       ...subtitleStyle,
     }),
   })
@@ -350,6 +354,7 @@ export async function uploadLocalTask(
   executionMode: ExecutionMode = "auto",
   dubbingEnabled = true,
   subtitleStyle: SubtitleStyleInput = DEFAULT_SUBTITLE_STYLE,
+  bilibiliDraftEnabled = true,
 ) {
   const form = new FormData()
   form.append("direction", direction)
@@ -359,6 +364,7 @@ export async function uploadLocalTask(
   }
   form.append("execution_mode", executionMode)
   form.append("dubbing_enabled", String(dubbingEnabled))
+  form.append("bilibili_draft_enabled", String(bilibiliDraftEnabled))
   form.append("subtitle_zh_font", subtitleStyle.subtitle_zh_font)
   form.append("subtitle_en_font", subtitleStyle.subtitle_en_font)
   form.append("subtitle_zh_font_size", String(subtitleStyle.subtitle_zh_font_size))
