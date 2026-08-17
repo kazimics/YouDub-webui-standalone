@@ -7,7 +7,7 @@ import time
 from http.cookiejar import MozillaCookieJar
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import unquote
 
 import requests
@@ -159,6 +159,7 @@ def upload_video(
     upos_uri: str,
     chunk_size: int,
     biz_id: int,
+    progress_callback: Callable[[int, str], None] | None = None,
 ) -> tuple[str, int]:
     """上传视频文件并合并分片，返回 (B 站服务器端无后缀文件名, biz_id)。
 
@@ -211,6 +212,11 @@ def upload_video(
             if not etag:
                 raise BilibiliError(-1, f"视频分片 {chunk_index + 1}/{chunks} 上传失败")
             parts.append({"partNumber": chunk_index + 1, "eTag": etag})
+            if progress_callback is not None:
+                progress_callback(
+                    int((chunk_index + 1) * 100 / chunks),
+                    f"上传视频分片 {chunk_index + 1}/{chunks}",
+                )
 
     finalize_params = {
         "name": filename,

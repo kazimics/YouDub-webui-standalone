@@ -792,16 +792,33 @@ def create_bilibili_draft(task_id: str, payload: BilibiliDraftRequest) -> dict:
     from .bilibili_uploader import (
         BILIBILI_DRAFT_STAGE,
         BilibiliDraftError,
+        release_draft_upload,
         submit_bilibili_draft,
+        try_acquire_draft_upload,
     )
 
+    task = database.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    if not try_acquire_draft_upload(task_id):
+        raise HTTPException(
+            status_code=409,
+            detail="This task is already uploading a Bilibili draft. Please wait.",
+        )
     try:
+        database.ensure_bilibili_draft_stage(task_id)
         result = submit_bilibili_draft(
             task_id,
             title=payload.title,
             tid=payload.tid,
             tag=payload.tag,
             description=payload.description,
+            progress_callback=lambda progress, message: database.update_stage(
+                task_id,
+                BILIBILI_DRAFT_STAGE,
+                progress=progress,
+                last_message=message,
+            ),
         )
     except BilibiliDraftError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
@@ -831,6 +848,8 @@ def create_bilibili_draft(task_id: str, payload: BilibiliDraftRequest) -> dict:
         except Exception:
             logger.exception("Failed to mark bilibili_draft stage failed for task %s", task_id)
         raise HTTPException(status_code=502, detail=f"Bilibili request failed: {exc}") from exc
+    finally:
+        release_draft_upload(task_id)
     database.update_stage(
         task_id,
         BILIBILI_DRAFT_STAGE,

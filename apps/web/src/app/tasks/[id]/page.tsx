@@ -248,6 +248,9 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
   const isPaused = task?.status === "paused"
   const isManual = task?.execution_mode === "manual"
   const canRedoStage = isManual && !isRunning && !isQueued
+  const bilibiliDraftUploading = Boolean(
+    task?.stages.some((stage) => stage.name === "bilibili_draft" && stage.status === "running"),
+  )
   const redoConfirmStageInfo = task?.stages.find((stage) => stage.name === redoConfirmStage)
 
   const progress = useMemo(() => {
@@ -382,6 +385,7 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
                 </Button>
                 <Button
                   variant="outline"
+                  disabled={bilibiliDraftUploading}
                   onClick={() => {
                     setBilibiliTitle(task.translated_title || task.title || "")
                     setBilibiliDescription(task.translated_description || "")
@@ -393,7 +397,9 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
                   }}
                 >
                   <Upload className="size-4" />
-                  {t.task.bilibiliDraft}
+                  {bilibiliDraftUploading
+                    ? t.task.bilibiliDraftAutoUploading
+                    : t.task.bilibiliDraft}
                 </Button>
               </div>
             </CardContent>

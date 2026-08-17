@@ -286,4 +286,63 @@ describe("任务详情轮询", () => {
       expect(body.description).toBe("First paragraph.\n\nSecond paragraph.")
     })
   })
+
+  it("自动上传 B 站草稿进行中时禁用上传按钮", async () => {
+    const uploadingTask: Task = {
+      ...taskWithStatus("succeeded"),
+      final_video_path: "D:\\workfolder\\task-race\\final.mp4",
+      stages: [
+        {
+          task_id: "task-race",
+          name: "done",
+          label: "Done",
+          status: "succeeded",
+          progress: 100,
+          started_at: null,
+          completed_at: null,
+          last_message: null,
+          error_message: null,
+        },
+        {
+          task_id: "task-race",
+          name: "bilibili_draft",
+          label: "Bilibili draft",
+          status: "running",
+          progress: 40,
+          started_at: "2026-08-17T00:00:00Z",
+          completed_at: null,
+          last_message: "上传视频分片 2/3",
+          error_message: null,
+        },
+      ],
+    }
+
+    mocks.fetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      const method = init?.method || "GET"
+      if (method === "GET" && path === "/api/tasks/task-race") {
+        return jsonResponse(uploadingTask)
+      }
+      if (method === "GET" && path === "/api/tasks/task-race/log") {
+        return new Response("uploading", { status: 200 })
+      }
+      throw new Error(`未预期的请求: ${method} ${path}`)
+    })
+    vi.stubGlobal("fetch", mocks.fetch)
+
+    const params = Promise.resolve({ id: "task-race" })
+    await act(async () => {
+      render(
+        <LanguageProvider>
+          <Suspense fallback={<div>loading</div>}>
+            <TaskDetailPage params={params} />
+          </Suspense>
+        </LanguageProvider>,
+      )
+      await params
+    })
+
+    const openButton = await screen.findByRole("button", { name: "自动上传中…" })
+    expect(openButton).toBeDisabled()
+  })
 })

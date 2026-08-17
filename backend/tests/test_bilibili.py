@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -586,3 +587,93 @@ def test_bilibili_auto_upload_failure_keeps_task_succeeded(monkeypatch, tmp_path
     assert stage["error_message"] == "upload boom"
     log = database.log_path(task_id).read_text(encoding="utf-8")
     assert "[bilibili_draft] Auto-upload failed: upload boom" in log
+
+
+def test_bilibili_draft_api_409_when_upload_already_in_progress(monkeypatch, tmp_path):
+    configure_tmp_runtime(monkeypatch, tmp_path)
+    task_id = _make_succeeded_task(tmp_path)
+    assert bilibili_uploader.try_acquire_draft_upload(task_id) is True
+    try:
+        client = authenticated_client()
+        response = client.post(f"/api/tasks/{task_id}/bilibili/draft", json={"title": "x"})
+        assert response.status_code == 409
+        assert "already uploading" in response.json()["detail"]
+    finally:
+        bilibili_uploader.release_draft_upload(task_id)
+
+
+def test_bilibili_auto_upload_adds_missing_stage_for_legacy_task(monkeypatch, tmp_path):
+    configure_tmp_runtime(monkeypatch, tmp_path)
+    task_id = _make_succeeded_task(tmp_path)
+    # Simulate a legacy task that has no bilibili_draft stage row.
+    with sqlite3.connect(database.DB_PATH) as conn:
+        conn.execute(
+            "DELETE FROM task_stages WHERE task_id = ? AND name = 'bilibili_draft'", (task_id,)
+        )
+    monkeypatch.setattr(
+        bilibili_uploader,
+        "submit_bilibili_draft",
+        lambda *a, **k: {"draft_id": 321, "aid": 0, "title": "Legacy", "cover": ""},
+    )
+
+    thread = bilibili_uploader.submit_bilibili_draft_async(task_id)
+    assert thread is not None
+    thread.join(timeout=10)
+
+    task = database.get_task(task_id)
+    stage = {entry["name"]: entry for entry in task["stages"]}["bilibili_draft"]
+    assert stage["status"] == "succeeded"
+    assert stage["last_message"] == "Draft created: 321"
+
+
+def test_bilibili_upload_video_progress_callback(monkeypatch, tmp_path):
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"a" * (3 * 1024))
+    calls: list[tuple[int, str]] = []
+
+    class FakeResponse:
+        def __init__(self, status_code=200, headers=None, json_data=None):
+            self.status_code = status_code
+            self.headers = headers or {}
+            self.json_data = json_data if json_data is not None else {"OK": 1}
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self.json_data
+
+    responses = [
+        FakeResponse(headers={"ETag": "etag-1"}),
+        FakeResponse(headers={"ETag": "etag-2"}),
+        FakeResponse(headers={"ETag": "etag-3"}),
+    ]
+
+    class StubSession:
+        def put(self, url, **kwargs):
+            return responses.pop(0)
+
+        def post(self, url, **kwargs):
+            if "uploads" in str(url):
+                return FakeResponse(json_data={"upload_id": "upid"})
+            return FakeResponse(json_data={"OK": 1})
+
+    monkeypatch.setattr(bilibili.time, "sleep", lambda *a, **k: None)
+
+    def progress(percent, message):
+        calls.append((percent, message))
+
+    filename, biz_id = bilibili.upload_video(
+        StubSession(),
+        video,
+        "auth",
+        "//upos.example",
+        "upos://bucket/server_file.mp4",
+        1024,
+        9,
+        progress_callback=progress,
+    )
+
+    assert filename == "server_file"
+    assert biz_id == 9
+    assert calls == [(33, "上传视频分片 1/3"), (66, "上传视频分片 2/3"), (100, "上传视频分片 3/3")]

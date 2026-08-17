@@ -158,6 +158,7 @@ const messages: Record<UiLanguage, Messages> = {
       redoStageDescription: "This clears this stage and all downstream artifacts, then re-queues from",
       confirmRedoStage: "Confirm redo",
       bilibiliDraft: "Upload Bilibili draft",
+      bilibiliDraftAutoUploading: "Auto-uploading…",
       bilibiliDraftTitle: "Upload to Bilibili as draft",
       bilibiliDraftDescription:
         "Upload the final video to Bilibili as a draft. Nothing is published until you publish it in Bilibili.",
@@ -389,6 +390,7 @@ const messages: Record<UiLanguage, Messages> = {
       redoStageDescription: "这会清除该阶段及所有下游产物，并从这里重新排队执行：",
       confirmRedoStage: "确认重做",
       bilibiliDraft: "上传 B 站草稿",
+      bilibiliDraftAutoUploading: "自动上传中…",
       bilibiliDraftTitle: "上传为 B 站草稿",
       bilibiliDraftDescription:
         "将最终视频上传为 B 站草稿，不会直接发布，之后可在 B 站检查并手动发布。",

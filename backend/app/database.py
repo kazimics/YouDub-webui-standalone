@@ -309,6 +309,18 @@ def normalize_execution_mode(value: str | None) -> str:
     return mode
 
 
+def ensure_bilibili_draft_stage(task_id: str, *, enabled: bool = True) -> None:
+    """Make sure a task has a bilibili_draft stage row (legacy tasks may lack it)."""
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO task_stages (task_id, name, label, status)
+            VALUES (?, 'bilibili_draft', 'Bilibili draft', ?)
+            """,
+            (task_id, "pending" if enabled else "skipped"),
+        )
+
+
 def create_task(
     url: str,
     task_id: str | None = None,

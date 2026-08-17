@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import requests
 
@@ -14,6 +14,30 @@ from . import bilibili, database, runtime_security
 logger = logging.getLogger(__name__)
 
 BILIBILI_DRAFT_STAGE = "bilibili_draft"
+
+# Guards against uploading the same task twice at the same time (manual +
+# automatic, or repeated clicks). One lock per task id; `_draft_upload_guard`
+# protects the dict itself.
+_draft_upload_locks: dict[str, threading.Lock] = {}
+_draft_upload_guard = threading.Lock()
+
+
+def _draft_upload_lock(task_id: str) -> threading.Lock:
+    with _draft_upload_guard:
+        lock = _draft_upload_locks.get(task_id)
+        if lock is None:
+            lock = threading.Lock()
+            _draft_upload_locks[task_id] = lock
+        return lock
+
+
+def try_acquire_draft_upload(task_id: str) -> bool:
+    """Try to mark this task as uploading; returns False if already uploading."""
+    return _draft_upload_lock(task_id).acquire(blocking=False)
+
+
+def release_draft_upload(task_id: str) -> None:
+    _draft_upload_lock(task_id).release()
 
 
 class BilibiliDraftError(Exception):
@@ -55,6 +79,7 @@ def submit_bilibili_draft(
     tid: int = 171,
     tag: str = "",
     description: str = "",
+    progress_callback: Callable[[int, str], None] | None = None,
 ) -> dict[str, Any]:
     """Upload the final video of a succeeded task as a Bilibili draft.
 
@@ -84,6 +109,8 @@ def submit_bilibili_draft(
     session = bilibili.build_session(sessdata, csrf)
     video_path = Path(final_path)
     pre = bilibili.prepare_upload(session, video_path.name, video_path.stat().st_size)
+    if progress_callback is not None:
+        progress_callback(0, "准备上传")
     filename, cid = bilibili.upload_video(
         session,
         video_path,
@@ -92,7 +119,10 @@ def submit_bilibili_draft(
         pre["upos_uri"],
         pre["chunk_size"],
         pre["biz_id"],
+        progress_callback=progress_callback,
     )
+    if progress_callback is not None:
+        progress_callback(100, "正在创建草稿")
     cover = _upload_cover(session, csrf, task)
     draft_payload = bilibili.build_draft_payload(
         csrf=csrf,
@@ -116,26 +146,46 @@ def _update_stage(task_id: str, **fields: Any) -> None:
         logger.exception("Failed to update bilibili_draft stage for task %s", task_id)
 
 
-def submit_bilibili_draft_async(task_id: str) -> threading.Thread:
-    """Start a background daemon thread that uploads the draft for a succeeded task."""
-    thread = threading.Thread(target=_auto_upload_worker, args=(task_id,), daemon=True)
+def submit_bilibili_draft_async(task_id: str) -> threading.Thread | None:
+    """Start a background daemon thread that uploads the draft for a succeeded task.
+
+    Returns None when this task is already uploading (manual upload in
+    progress or a previous auto-upload thread still running).
+    """
+    if not try_acquire_draft_upload(task_id):
+        _append_log(
+            task_id,
+            "[bilibili_draft] Auto-upload skipped: a draft upload is already in progress",
+        )
+        return None
+    thread = threading.Thread(
+        target=_auto_upload_worker, args=(task_id,), daemon=True
+    )
     thread.start()
     return thread
 
 
 def _auto_upload_worker(task_id: str) -> None:
     now = database.now_iso()
-    _update_stage(
-        task_id,
-        status="running",
-        started_at=now,
-        progress=0,
-        last_message="Uploading draft to Bilibili",
-        error_message=None,
-    )
-    _append_log(task_id, "[bilibili_draft] Auto-uploading draft to Bilibili...")
     try:
-        result = submit_bilibili_draft(task_id)
+        database.ensure_bilibili_draft_stage(task_id)
+        _update_stage(
+            task_id,
+            status="running",
+            started_at=now,
+            progress=0,
+            last_message="正在上传 B 站草稿",
+            error_message=None,
+        )
+        _append_log(task_id, "[bilibili_draft] Auto-uploading draft to Bilibili...")
+        result = submit_bilibili_draft(
+            task_id,
+            progress_callback=lambda progress, message: _update_stage(
+                task_id,
+                progress=progress,
+                last_message=message,
+            ),
+        )
         _update_stage(
             task_id,
             status="succeeded",
@@ -159,3 +209,5 @@ def _auto_upload_worker(task_id: str) -> None:
             error_message=error_message,
         )
         _append_log(task_id, f"[bilibili_draft] Auto-upload failed: {error_message}")
+    finally:
+        release_draft_upload(task_id)
